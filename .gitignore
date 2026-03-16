@@ -20,6 +20,9 @@ Thumbs.db
 
 # Build artifacts
 *.tar.gz
+/dist/
+/test_data/
+/.cross/
 
 # Config (user-specific)
 config.json

@@ -1,4 +1,4 @@
-# LMU Dashboard
+# LMU Pitwall
 
 A high-performance, widget-based telemetry dashboard for Le Mans Ultimate (LMU).
 Designed for a dedicated monitor (fullscreen PC) or any device via PWA (Android, tablet).
