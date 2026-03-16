@@ -1,0 +1,28 @@
+# Rust
+/bridge/target/
+**/*.exe
+**/*.res
+**/*.o
+
+# Node
+/dashboard/node_modules/
+/dashboard/dist/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.tar.gz
+
+# Config (user-specific)
+config.json
+
+# Claude
+.claude/

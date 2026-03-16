@@ -1,0 +1,190 @@
+import { useCallback } from 'react'
+import { useLayoutStore, LAYOUT_PRESETS } from '../stores/layoutStore'
+import { useTelemetryStore } from '../stores/telemetryStore'
+import { useSettingsStore } from '../stores/settingsStore'
+import { WIDGET_REGISTRY } from './widgetRegistry'
+import { colors, fonts } from '../styles/theme'
+
+function ConnectionBadge() {
+  const status = useTelemetryStore((s) => s.connection.status)
+  const gameConnected = useTelemetryStore((s) => s.connection.game_connected)
+
+  const dotColor =
+    status === 'connected' ? colors.success
+    : status === 'reconnecting' ? colors.accent
+    : colors.danger
+
+  const label =
+    status === 'connected' && gameConnected ? 'Live'
+    : status === 'connected' ? 'Bridge'
+    : status === 'reconnecting' ? '…'
+    : 'Off'
+
+  return (
+    <div style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+      <div style={{ width: 10, height: 10, borderRadius: '50%', background: dotColor, boxShadow: `0 0 5px ${dotColor}` }} />
+      <span style={{ fontFamily: fonts.body, fontSize: 18, color: dotColor }}>{label}</span>
+    </div>
+  )
+}
+
+export default function Toolbar({ onOpenSettings, onOpenResults, resultsOpen }: {
+  onOpenSettings: () => void
+  onOpenResults: () => void
+  resultsOpen: boolean
+}) {
+  const { activePreset, locked, setPreset, resetToDefault, toggleLock, addWidget } = useLayoutStore()
+  const fullscreen = useSettingsStore((s) => s.fullscreen)
+
+  const toggleFullscreen = useCallback(() => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().catch(() => {})
+    } else {
+      document.exitFullscreen().catch(() => {})
+    }
+  }, [])
+
+  return (
+    <div style={{
+      display: 'flex',
+      alignItems: 'center',
+      gap: 10,
+      padding: '7px 14px',
+      background: colors.bgCard,
+      borderBottom: `1px solid ${colors.border}`,
+      flexShrink: 0,
+      minHeight: 52,
+    }}>
+      {/* Title */}
+      <span style={{
+        fontFamily: fonts.heading,
+        fontSize: 30,
+        fontWeight: 700,
+        color: colors.primary,
+        letterSpacing: 2,
+        lineHeight: 1,
+        marginRight: 8,
+      }}>
+        LMU
+      </span>
+
+      <ConnectionBadge />
+
+      <div style={{ width: 1, height: 27, background: colors.border, margin: '0 4px' }} />
+
+      {/* Preset selector */}
+      <select
+        value={activePreset}
+        onChange={(e) => setPreset(e.target.value)}
+        style={{
+          background: colors.bgWidget,
+          border: `1px solid ${colors.border}`,
+          color: colors.text,
+          fontFamily: fonts.body,
+          fontSize: 18,
+          padding: '4px 8px',
+          borderRadius: 3,
+          cursor: 'pointer',
+        }}
+      >
+        {Object.keys(LAYOUT_PRESETS).map((name) => (
+          <option key={name} value={name}>{name}</option>
+        ))}
+      </select>
+
+      {/* Reset */}
+      <ToolbarBtn onClick={resetToDefault} title="Reset layout">↺</ToolbarBtn>
+
+      <div style={{ width: 1, height: 27, background: colors.border, margin: '0 4px' }} />
+
+      {/* Add Widget */}
+      {!locked && (
+        <select
+          value=""
+          onChange={(e) => { if (e.target.value) addWidget(e.target.value) }}
+          style={{
+            background: colors.bgWidget,
+            border: `1px solid ${colors.border}`,
+            color: colors.textMuted,
+            fontFamily: fonts.body,
+            fontSize: 18,
+            padding: '4px 8px',
+            borderRadius: 3,
+            cursor: 'pointer',
+          }}
+        >
+          <option value="" disabled>+ Add widget</option>
+          {Object.values(WIDGET_REGISTRY).map((meta) => (
+            <option key={meta.id} value={meta.id}>{meta.name}</option>
+          ))}
+        </select>
+      )}
+
+      {/* Spacer */}
+      <div style={{ flex: 1 }} />
+
+      {/* Post Race Results */}
+      <ToolbarBtn onClick={onOpenResults} title="Post Race Results" active={resultsOpen}>📋</ToolbarBtn>
+
+      {/* Lock */}
+      <ToolbarBtn
+        onClick={toggleLock}
+        title={locked ? 'Unlock layout' : 'Lock layout'}
+        active={locked}
+      >
+        {locked ? '🔒' : '🔓'}
+      </ToolbarBtn>
+
+      {/* Fullscreen */}
+      <ToolbarBtn onClick={toggleFullscreen} title="Toggle fullscreen (F11)" active={fullscreen}>⛶</ToolbarBtn>
+
+      {/* Settings */}
+      <ToolbarBtn onClick={onOpenSettings} title="Settings">⚙</ToolbarBtn>
+
+      <div style={{ width: 1, height: 27, background: colors.border, margin: '0 2px' }} />
+
+      {/* Version */}
+      <span style={{
+        fontFamily: fonts.body,
+        fontSize: 15,
+        color: colors.textMuted,
+        letterSpacing: 0.5,
+        userSelect: 'none',
+      }}>
+        v{__APP_VERSION__}
+      </span>
+    </div>
+  )
+}
+
+function ToolbarBtn({
+  onClick,
+  children,
+  title,
+  active,
+}: {
+  onClick: () => void
+  children: React.ReactNode
+  title?: string
+  active?: boolean
+}) {
+  return (
+    <button
+      onClick={onClick}
+      title={title}
+      style={{
+        background: active ? `${colors.primary}22` : colors.bgWidget,
+        border: `1px solid ${active ? colors.primary : colors.border}`,
+        color: active ? colors.primary : colors.textMuted,
+        fontFamily: fonts.body,
+        fontSize: 20,
+        padding: '4px 10px',
+        borderRadius: 3,
+        cursor: 'pointer',
+        lineHeight: 1.2,
+      }}
+    >
+      {children}
+    </button>
+  )
+}
