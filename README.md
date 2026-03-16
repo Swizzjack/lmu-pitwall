@@ -13,7 +13,7 @@ Built with Rust and React. Runs as a single `.exe` — no installation required,
 - **Electronics** — TC, ABS, Engine Map, ARB, Regen, and Brake Migration. Reads initial values from the LMU garage API, then tracks button presses on your steering wheel to keep values in sync — works in online sessions.
 - **Tires** — Temperatures, pressures, wear percentage, and brake disc temps.
 - **Track Map** — SVG-based live track map with vehicle positions, updated in real-time.
-- **Delta Bar** — Delta to personal best lap time, computed via linear interpolation from shared memory data.
+- **Post Race Results** — Load any LMU session XML log file and view detailed race results: final classification, lap times, sector times, gaps, and pitstops for all drivers.
 - **Drag & Drop Layout** — Arrange and resize widgets however you like. Layout is saved automatically.
 
 ## How It Works
@@ -49,6 +49,14 @@ To use the Electronics widget, you need to configure which buttons on your steer
 4. The binding is saved to `config.json`
 
 The widget reads initial values from LMU's garage API when you enter the car, and tracks changes from there.
+
+## Post Race Results
+
+After a session, you can load the XML log file that LMU automatically saves to review detailed results:
+
+1. Open the Post Race Results view
+2. Select an XML session file (found in LMU's `UserData\Log\Results\` folder)
+3. Browse the full classification with lap times, sectors, gaps, and pitstop data
 
 ## Building from Source
 
