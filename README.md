@@ -1,115 +1,84 @@
 # LMU Pitwall
 
-A high-performance, widget-based telemetry dashboard for Le Mans Ultimate (LMU).
-Designed for a dedicated monitor (fullscreen PC) or any device via PWA (Android, tablet).
+A real-time sim racing dashboard for [Le Mans Ultimate](https://www.lemansultimate.com/), designed to run on a second (or third, or fourth) monitor.
 
-## Architecture
+Built with Rust and React. Runs as a single `.exe` — no installation required, no dependencies, no separate server.
 
-```
-LMU (Windows) ──Shared Memory──► Rust Bridge (.exe) ──WebSocket:9000──► React Dashboard (Browser/PWA)
-                  REST API (~5Hz) ──────────────────────────────────────►
-```
+![LMU Pitwall Dashboard](docs/screenshots/screenshot-full.png)
 
-- **Rust Bridge** (`bridge/`): Reads LMU shared memory at 50Hz, broadcasts telemetry via WebSocket at 30Hz
-- **React Dashboard** (`dashboard/`): Widget grid with drag & drop, Canvas gauges, PWA support
+## Features
 
-## Quick Start
+- **Fuel Manager** — Fuel remaining, consumption per lap (median rolling average), laps remaining, and fuel needed to finish. Excludes first lap of each stint for accurate data.
+- **Standings** — Live positions with car number, brand, gap to leader, and sector times.
+- **Electronics** — TC, ABS, Engine Map, ARB, Regen, and Brake Migration. Reads initial values from the LMU garage API, then tracks button presses on your steering wheel to keep values in sync — works in online sessions.
+- **Tires** — Temperatures, pressures, wear percentage, and brake disc temps.
+- **Track Map** — SVG-based live track map with vehicle positions, updated in real-time.
+- **Delta Bar** — Delta to personal best lap time, computed via linear interpolation from shared memory data.
+- **Drag & Drop Layout** — Arrange and resize widgets however you like. Layout is saved automatically.
 
-### Requirements
+## How It Works
 
-- WSL2 with Rust (installed via `rustup`)
-- Node.js 18+
-- For Windows cross-compilation: `gcc-mingw-w64-x86-64` OR Docker (for `cross`)
+LMU Pitwall reads telemetry data from the rF2 Shared Memory buffer that Le Mans Ultimate exposes, combined with LMU's built-in REST API (port 6397) for garage and session data. A Rust backend processes the data and serves a React dashboard via an embedded web server — all in one `.exe`.
 
-### Setup
+The Electronics widget uses a button-counting approach (similar to the community's [LMU Electronic Bridge](https://community.lemansultimate.com/index.php?threads/electronic-bridge-online-and-offline-tcs-abs-regen-arb-motor-map-brake-migration.15765/)) to track TC/ABS/ARB changes during online sessions, where direct memory access is blocked by EasyAntiCheat.
 
+## Download
+
+Grab the latest release from the [Releases page](https://github.com/Swizzjack/lmu-pitwall/releases).
+
+**Option A: Installer** — Download `LMU-Pitwall-Setup-x.x.x.exe` and run it.
+
+**Option B: Portable** — Download `lmu-pitwall.exe` and `config.json`, place them in the same folder, and run the `.exe`.
+
+## Usage
+
+1. Start Le Mans Ultimate
+2. Run LMU Pitwall
+3. Open a session (Practice, Qualifying, or Race)
+4. The dashboard auto-connects and starts showing live data
+
+The dashboard runs at `http://localhost:9000` by default. You can also open it on any device in your local network by navigating to `http://<your-pc-ip>:9000` in a browser (make sure Windows Firewall allows port 9000).
+
+## Electronics Setup
+
+To use the Electronics widget, you need to configure which buttons on your steering wheel correspond to TC+/TC-/ABS+/ABS- etc.
+
+1. Open the Electronics widget settings (gear icon)
+2. Click "Assign" next to each function
+3. Press the corresponding button on your wheel
+4. The binding is saved to `config.json`
+
+The widget reads initial values from LMU's garage API when you enter the car, and tracks changes from there.
+
+## Building from Source
+
+Requires: Rust (with cargo-zigbuild), Node.js, Zig 0.13+
 ```bash
+# In WSL2 — every cargo command needs:
+export PATH="$HOME/.local/bin:$PATH" && source ~/.cargo/env
+
 # Install dependencies
-make install-deps
+cd dashboard && npm install && cd ..
 
-# Development (React frontend only)
-make dev
-# → Open http://localhost:5173 in browser
+# Build release
+make build-release
 ```
 
-### Build for Production
-
-```bash
-# Build Rust .exe for Windows (requires gcc-mingw-w64)
-make build-bridge
-
-# Alternative: Docker-based cross-compilation (no mingw needed)
-make build-bridge-cross
-
-# Build React frontend
-make build-dashboard
-
-# Build everything
-make build-all
-```
-
-### Running
-
-1. Copy `dist/lmu-bridge.exe` to your Windows PC
-2. Start LMU (any session)
-3. Run `lmu-bridge.exe` — it will wait for LMU to start
-4. Open the dashboard in a browser: `http://WINDOWS-PC-IP:5173`
-5. For Android: Install as PWA via browser menu
-
-## Monorepo Structure
-
-```
-lmu-dashboard/
-├── bridge/        # Rust WebSocket data bridge (→ lmu-bridge.exe)
-├── dashboard/     # React/TypeScript frontend (PWA)
-├── shared/        # Protocol documentation
-├── .cross/        # Docker cross-compilation config
-├── Makefile       # Build commands
-└── README.md
-```
+The output is a single `.exe` in `bridge/target/x86_64-pc-windows-gnu/release/`.
 
 ## Tech Stack
 
-| Component | Technology |
-|-----------|-----------|
-| Data Bridge | Rust, tokio, tokio-tungstenite, MessagePack |
-| Shared Memory | Windows Named MMF (windows-sys crate) |
-| Frontend | React 18, TypeScript, Vite |
-| State | Zustand |
-| Layout | react-grid-layout |
-| Styling | Tailwind CSS |
-| PWA | vite-plugin-pwa |
+- **Backend:** Rust — rF2 Shared Memory reader, WebSocket server (port 9000), REST API client, HID input monitoring
+- **Frontend:** React + TypeScript — widget-based layout with drag & drop
+- **Build:** cargo-zigbuild for Windows cross-compilation from WSL2, rust-embed for single-binary distribution
+- **Design:** Dark theme (#0f0f0f background, #facc15 primary, #f97316 accent), Teko / Roboto Condensed / JetBrains Mono fonts
 
-## Branding
+## Credits
 
-| Token | Value |
-|-------|-------|
-| Background | `#0f0f0f` |
-| Primary | `#facc15` (yellow) |
-| Accent | `#f97316` (orange) |
-| Fonts | Teko, Roboto Condensed, JetBrains Mono |
+Built by [Swizzjack](https://github.com/Swizzjack) with the help of [Claude](https://claude.ai) (Anthropic) for architecture, code generation, and development workflow.
 
-## WebSocket Protocol
+Inspired by the LMU community, particularly the [LMU Electronic Bridge](https://community.lemansultimate.com/index.php?threads/electronic-bridge-online-and-offline-tcs-abs-regen-arb-motor-map-brake-migration.15765/) by nikolaiNr7 for the button-counting approach.
 
-See [`shared/protocol.md`](shared/protocol.md) for the full message format.
+## License
 
-## Cross-Compilation (WSL2 → Windows .exe)
-
-```bash
-# Option 1: Direct (requires sudo apt install gcc-mingw-w64-x86-64)
-cargo build --target x86_64-pc-windows-gnu --release
-
-# Option 2: Via Docker (no local mingw needed)
-cargo install cross
-cross build --target x86_64-pc-windows-gnu --release
-```
-
-## Task Plan
-
-This project is built in 20 tasks across 5 phases:
-
-- **Phase 1 (Tasks 1–5):** Foundation — Monorepo, Rust structs, shared memory reader, WebSocket server
-- **Phase 2 (Tasks 6–10):** Dashboard — React setup, widget grid, Speed/RPM/Gear, Tires, Lap timing
-- **Phase 3 (Tasks 11–14):** Widgets — Fuel, Inputs, Standings, Weather
-- **Phase 4 (Tasks 15–18):** Polish — Layout presets, PWA, performance, error handling
-- **Phase 5 (Tasks 19–20):** Advanced — REST API (Virtual Energy), Electronics (TC/ABS/ARB)
+[MIT](LICENSE)
