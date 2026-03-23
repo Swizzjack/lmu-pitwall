@@ -154,11 +154,14 @@ export default function FuelManager() {
   const noVeVehicle = veAvailable === null
     ? veHistory === null   // garage data not yet fetched → heuristic
     : veAvailable === false
-  const remLapsFuel = noVeVehicle && hasData && isValidLapTime(avgLapTime) && remainingSec > 0
-    ? Math.ceil(remainingSec / avgLapTime) + lapReserve
+  // Use a continuous (non-ceiled) laps value so that remLapsRaw * avgConsumption
+  // decreases at the same rate as fuel burns → refuelFuelL stays stable mid-lap.
+  const remLapsRaw = noVeVehicle && hasData && isValidLapTime(avgLapTime) && remainingSec > 0
+    ? remainingSec / avgLapTime + lapReserve
     : null
-  const refuelFuelL = remLapsFuel !== null
-    ? Math.max(0, remLapsFuel * avgConsumption - fuel)
+  const remLapsFuel = remLapsRaw !== null ? Math.ceil(remLapsRaw) : null  // display only
+  const refuelFuelL = remLapsRaw !== null
+    ? Math.max(0, Math.ceil(remLapsRaw * avgConsumption - fuel))
     : null
   const refuelFuelColor = refuelFuelL !== null
     ? (refuelFuelL <= 0 ? '#22c55e' : '#ef4444')
