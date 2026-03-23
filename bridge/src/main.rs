@@ -51,6 +51,11 @@ struct TelemetryState {
     rules: Option<rF2RulesBuffer>,
     is_connected: bool,
     electronics: ElectronicsSnapshot,
+    /// Per-lap VE history from strategy/usage REST API; None = data unavailable.
+    ve_history: Option<Vec<f64>>,
+    /// Whether this car supports Virtual Energy (from VM_VIRTUAL_ENERGY.available in garage API).
+    /// None = not yet fetched.
+    ve_available: Option<bool>,
 }
 
 impl TelemetryState {
@@ -62,6 +67,8 @@ impl TelemetryState {
             rules: None,
             is_connected: false,
             electronics: ElectronicsSnapshot::default(),
+            ve_history: None,
+            ve_available: None,
         }
     }
 }
@@ -92,6 +99,8 @@ fn build_telemetry_update(
     player_id: i32,
     sc: Option<&rF2ScoringBuffer>,
     fuel: &FuelSnapshot,
+    ve_history: Option<Vec<f64>>,
+    ve_available: Option<bool>,
 ) -> Option<ServerMessage> {
     let num = (tel.mNumVehicles as usize).min(MAX_MAPPED_VEHICLES);
     if num == 0 {
@@ -181,12 +190,16 @@ fn build_telemetry_update(
         lap_start_et: lap_start_et,
         // Fuel strategy
         fuel_avg_consumption:   fuel.avg_consumption,
+        fuel_avg_sample_count:  fuel.sample_count,
         fuel_laps_remaining:    fuel.laps_remaining,
         fuel_stint_number:      fuel.stint_number,
         fuel_stint_laps:        fuel.stint_laps,
         fuel_stint_consumption: fuel.stint_consumption,
         fuel_recommended:       fuel.recommended,
         fuel_pit_detected:      fuel.pit_detected,
+        fuel_avg_lap_time:      fuel.avg_lap_time,
+        ve_history,
+        ve_available,
     })
 }
 
@@ -301,7 +314,9 @@ fn build_session_info(sc: &rF2ScoringBuffer) -> ServerMessage {
             track_temp:     info.mTrackTemp,
             rain_intensity: info.mRaining,
         },
-        session_laps:    info.mMaxLaps,
+        // Filter mMaxLaps: time-based races use 999999, uninitialized can be INT32_MAX.
+        // Only send a valid lap count when it's a genuine lap-limited session.
+        session_laps:    if info.mMaxLaps > 0 && info.mMaxLaps < 999_000 { info.mMaxLaps } else { 0 },
         session_minutes: if info.mEndET > 0.0 { info.mEndET / 60.0 } else { 0.0 },
     }
 }
@@ -532,6 +547,8 @@ async fn task_polling(
     let (garage_tx, mut garage_rx) = tokio::sync::mpsc::channel::<GarageData>(4);
     // Channel for GetGameState results (2 Hz poll → select! arm).
     let (game_state_tx, mut game_state_rx) = tokio::sync::mpsc::channel::<GameState>(4);
+    // Channel for strategy/usage VE fetch results.
+    let (strategy_tx, mut strategy_rx) = tokio::sync::mpsc::channel::<Vec<f64>>(4);
 
     let mut poll_ticker = tokio::time::interval(Duration::from_millis(20)); // 50 Hz
     poll_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -543,6 +560,13 @@ async fn task_polling(
     // GetGameState poll at 2 Hz to detect MultiStintState transitions.
     let mut game_state_ticker = tokio::time::interval(Duration::from_millis(500));
     game_state_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+    // strategy/usage VE poll every 3 seconds.
+    let mut strategy_ticker = tokio::time::interval(Duration::from_secs(3));
+    strategy_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+    // Player name for strategy/usage lookup (extracted from scoring).
+    let mut last_player_name = String::new();
 
     info!("Waiting for Le Mans Ultimate...");
 
@@ -698,8 +722,22 @@ async fn task_polling(
                                 let _ = tx.blocking_send(data);
                             }
                         });
+                        // Clear cached VE on session change.
+                        state.write().await.ve_history = None;
                     }
                     last_session_key = key;
+
+                    // Track player name for strategy/usage lookup.
+                    let num_vehs = (sc_data.mScoringInfo.mNumVehicles as usize).min(MAX_MAPPED_VEHICLES);
+                    if let Some(name) = sc_data.mVehicles[..num_vehs]
+                        .iter()
+                        .find(|v| v.mIsPlayer != 0)
+                        .map(|v| bytes_to_str(&v.mDriverName).to_string())
+                    {
+                        if !name.is_empty() {
+                            last_player_name = name;
+                        }
+                    }
 
                     // Pit exit detection: mInPits true → false triggers garage fetch.
                     let num_vehs = (sc_data.mScoringInfo.mNumVehicles as usize).min(MAX_MAPPED_VEHICLES);
@@ -735,7 +773,9 @@ async fn task_polling(
             Some(data) = garage_rx.recv() => {
                 info!("Garage data applied to electronics tracker");
                 elec_tracker.apply_garage_data(&data);
-                state.write().await.electronics = elec_tracker.snapshot(buttons_configured);
+                let mut s = state.write().await;
+                s.electronics  = elec_tracker.snapshot(buttons_configured);
+                s.ve_available = data.ve_available;
             }
 
             // --- 2 Hz GetGameState poll ---
@@ -827,6 +867,24 @@ async fn task_polling(
                 }
             }
 
+            // --- strategy/usage VE poll (0.33 Hz) ---
+            _ = strategy_ticker.tick() => {
+                if reader.is_connected() && !last_player_name.is_empty() {
+                    let name = last_player_name.clone();
+                    let tx = strategy_tx.clone();
+                    tokio::task::spawn_blocking(move || {
+                        if let Some(ve) = garage_api::fetch_strategy_ve(&name) {
+                            let _ = tx.blocking_send(ve);
+                        }
+                    });
+                }
+            }
+
+            // --- strategy/usage VE result ---
+            Some(history) = strategy_rx.recv() => {
+                state.write().await.ve_history = Some(history);
+            }
+
             // --- 2 Hz input diagnostics broadcast ---
             _ = diag_ticker.tick() => {
                 let is_capture = capture.is_some();
@@ -875,9 +933,12 @@ async fn task_polling(
                         s.scoring      = None;
                         s.lmu_extended = None;
                         s.rules        = None;
+                        s.ve_history   = None;
+                        s.ve_available = None;
                         was_connected  = false;
                         last_player_in_pits = false;
                         last_multi_stint_state = String::new();
+                        last_player_name = String::new();
                     }
                     _ => {} // no change in connection state
                 }
@@ -919,6 +980,7 @@ async fn task_broadcaster(
     // Fuel strategy tracker — lives here for the lifetime of the broadcaster task.
     let mut fuel_tracker = FuelTracker::new();
     let mut fuel_snapshot = FuelSnapshot::default();
+    let mut fuel_session_key = String::new();
 
     // All-drivers lap snapshot tracker.
     let mut lap_tracker = LapTracker::new();
@@ -945,6 +1007,21 @@ async fn task_broadcaster(
                 continue;
             }
 
+            // Session-change detection for fuel tracker reset.
+            if let Some(ref sc) = s.scoring {
+                let key = format!(
+                    "{}/{}",
+                    sc.mScoringInfo.mSession,
+                    bytes_to_str(&sc.mScoringInfo.mTrackName),
+                );
+                if !fuel_session_key.is_empty() && key != fuel_session_key {
+                    fuel_tracker = FuelTracker::new();
+                    fuel_snapshot = FuelSnapshot::default();
+                    info!("Session changed — fuel tracker reset");
+                }
+                fuel_session_key = key;
+            }
+
             // Update fuel tracker on every telemetry tick (needs mutable access outside lock).
             if send_tel {
                 if let (Some(ref tel), Some(ref sc)) = (&s.telemetry, &s.scoring) {
@@ -969,6 +1046,10 @@ async fn task_broadcaster(
                         .map(|v| v.mInPits != 0)
                         .unwrap_or(false);
 
+                    let last_lap_time = player_sc
+                        .map(|v| v.mLastLapTime)
+                        .unwrap_or(-1.0);
+
                     let max_laps = sc.mScoringInfo.mMaxLaps;
                     let session_laps_remaining = if max_laps > 0 && max_laps < 999_000 {
                         (max_laps - current_lap).max(0)
@@ -976,12 +1057,12 @@ async fn task_broadcaster(
                         -1
                     };
 
-                    fuel_snapshot = fuel_tracker.update(current_fuel, current_lap, in_pits, session_laps_remaining);
+                    fuel_snapshot = fuel_tracker.update(current_fuel, current_lap, in_pits, session_laps_remaining, last_lap_time);
                 }
             }
 
             let tel_msg = if send_tel {
-                s.telemetry.as_ref().and_then(|t| build_telemetry_update(t, player_id, s.scoring.as_ref(), &fuel_snapshot))
+                s.telemetry.as_ref().and_then(|t| build_telemetry_update(t, player_id, s.scoring.as_ref(), &fuel_snapshot, s.ve_history.clone(), s.ve_available))
             } else {
                 None
             };

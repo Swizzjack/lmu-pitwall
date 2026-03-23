@@ -126,13 +126,17 @@ export interface TelemetryUpdate {
   current_et: number
   lap_start_et: number     // session ET when current lap started
   // Fuel strategy (computed by bridge FuelTracker)
-  fuel_avg_consumption: number    // L/lap rolling avg (5 laps); 0 = no data
+  fuel_avg_consumption: number    // L/lap rolling median; 0 = no valid data yet
+  fuel_avg_sample_count: number   // number of fuel-consumption samples (0–10)
   fuel_laps_remaining: number     // estimated laps remaining; Infinity if no avg
   fuel_stint_number: number       // 1-based stint counter
-  fuel_stint_laps: number         // laps completed in current stint
+  fuel_stint_laps: number         // laps completed in current stint (including outlap)
   fuel_stint_consumption: number  // total fuel used since stint start
-  fuel_recommended: number        // fuel needed for rest of session + 0.5 lap reserve; 0 if unknown
+  fuel_recommended: number        // kept for compat; always 0.0
   fuel_pit_detected: boolean      // true for ~3s after pit stop detected
+  fuel_avg_lap_time: number       // rolling median lap time (s); 0 = no valid data yet
+  ve_history: number[] | null     // per-lap VE values from REST API (0–1 each); null = unavailable
+  ve_available: boolean | null    // true if car supports VE (from garage API); null = not yet fetched
 }
 
 export interface ScoringUpdate {

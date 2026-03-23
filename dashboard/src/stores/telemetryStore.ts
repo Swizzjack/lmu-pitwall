@@ -50,12 +50,16 @@ interface TelemetrySection {
   lap_start_et: number
   // Fuel strategy
   fuel_avg_consumption: number
+  fuel_avg_sample_count: number
   fuel_laps_remaining: number
   fuel_stint_number: number
   fuel_stint_laps: number
   fuel_stint_consumption: number
   fuel_recommended: number
   fuel_pit_detected: boolean
+  fuel_avg_lap_time: number
+  ve_history: number[] | null
+  ve_available: boolean | null
 }
 
 interface ScoringSection {
@@ -148,12 +152,16 @@ const defaultTelemetry: TelemetrySection = {
   current_et: 0,
   lap_start_et: 0,
   fuel_avg_consumption: 0,
+  fuel_avg_sample_count: 0,
   fuel_laps_remaining: Infinity,
   fuel_stint_number: 1,
   fuel_stint_laps: 0,
   fuel_stint_consumption: 0,
   fuel_recommended: 0,
   fuel_pit_detected: false,
+  fuel_avg_lap_time: 0,
+  ve_history: null,
+  ve_available: null,
 }
 
 const defaultScoring: ScoringSection = {
@@ -286,12 +294,16 @@ export const useTelemetryStore = create<TelemetryStore>((set) => ({
             current_et: msg.current_et,
             lap_start_et: msg.lap_start_et,
             fuel_avg_consumption: msg.fuel_avg_consumption,
+            fuel_avg_sample_count: msg.fuel_avg_sample_count,
             fuel_laps_remaining: msg.fuel_laps_remaining,
             fuel_stint_number: msg.fuel_stint_number,
             fuel_stint_laps: msg.fuel_stint_laps,
             fuel_stint_consumption: msg.fuel_stint_consumption,
             fuel_recommended: msg.fuel_recommended,
             fuel_pit_detected: msg.fuel_pit_detected,
+            fuel_avg_lap_time: msg.fuel_avg_lap_time,
+            ve_history: msg.ve_history ?? null,
+            ve_available: msg.ve_available ?? null,
           },
         })
         break
