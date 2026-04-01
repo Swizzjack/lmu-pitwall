@@ -2,8 +2,7 @@ import { useEffect, useRef, useCallback } from 'react'
 import { decode } from '@msgpack/msgpack'
 import { useTelemetryStore } from '../stores/telemetryStore'
 import { useSettingsStore } from '../stores/settingsStore'
-import { useElectronicsConfigStore } from '../stores/electronicsConfigStore'
-import type { ServerMessage, ClientCommand } from '../types/telemetry'
+import type { ServerMessage } from '../types/telemetry'
 
 export type ConnectionStatus = 'connected' | 'disconnected' | 'reconnecting'
 
@@ -17,16 +16,6 @@ function buildWsUrl(): string {
   return `ws://${host}:${wsPort}`
 }
 
-// Module-level WebSocket reference for sendWsCommand (used by stores/components
-// that cannot use hooks). Set when connected, cleared on close.
-let _globalWs: WebSocket | null = null
-
-export function sendWsCommand(cmd: ClientCommand): void {
-  if (_globalWs?.readyState === WebSocket.OPEN) {
-    _globalWs.send(JSON.stringify(cmd))
-  }
-}
-
 export function useWebSocket() {
   const wsRef = useRef<WebSocket | null>(null)
   const reconnectAttemptRef = useRef(0)
@@ -35,7 +24,6 @@ export function useWebSocket() {
 
   const setConnection = useTelemetryStore((s) => s.setConnection)
   const applyMessage = useTelemetryStore((s) => s.applyMessage)
-  const applyConfigMessage = useElectronicsConfigStore((s) => s.applyMessage)
 
   const connect = useCallback(() => {
     if (!mountedRef.current) return
@@ -47,7 +35,6 @@ export function useWebSocket() {
 
     ws.onopen = () => {
       if (!mountedRef.current) { ws.close(); return }
-      _globalWs = ws
       reconnectAttemptRef.current = 0
       setConnection('connected')
     }
@@ -64,7 +51,6 @@ export function useWebSocket() {
           msg = JSON.parse(event.data as string) as ServerMessage
         }
         applyMessage(msg)
-        applyConfigMessage(msg)
       } catch {
         // Malformed message — ignore
       }
@@ -75,7 +61,6 @@ export function useWebSocket() {
     }
 
     ws.onclose = () => {
-      if (wsRef.current === ws) _globalWs = null
       if (!mountedRef.current) return
       wsRef.current = null
       reconnectAttemptRef.current += 1
@@ -93,7 +78,7 @@ export function useWebSocket() {
         connect()
       }, delay)
     }
-  }, [setConnection, applyMessage, applyConfigMessage])
+  }, [setConnection, applyMessage])
 
   useEffect(() => {
     mountedRef.current = true

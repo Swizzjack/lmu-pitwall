@@ -24,6 +24,10 @@ Thumbs.db
 /test_data/
 /.cross/
 
+# Proprietary SDK headers (Studio 397 / rF2 plugin SDK)
+InternalsPlugin.hpp
+PluginObjects.hpp
+
 # Config (user-specific)
 config.json
 

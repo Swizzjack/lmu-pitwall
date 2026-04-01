@@ -11,11 +11,12 @@ import SessionInfo from './widgets/SessionInfo'
 import WeatherWidget from './widgets/WeatherWidget'
 import ConnectionStatus from './widgets/ConnectionStatus'
 import Electronics from './widgets/Electronics'
-import InputDebug from './widgets/InputDebug'
 import InputChart from './widgets/InputChart'
 import VehicleStatus from './widgets/VehicleStatus'
 import TrackMap from './widgets/TrackMap'
 import LapHistory from './widgets/LapHistory'
+import TimeWidget from './widgets/TimeWidget'
+import Flags from './widgets/Flags'
 
 export interface WidgetMeta {
   id: string
@@ -110,13 +111,6 @@ export const WIDGET_REGISTRY: Record<string, WidgetMeta> = {
     defaultSize: { w: 4, h: 3 },
     minSize: { w: 2, h: 2 },
   },
-  InputDebug: {
-    id: 'InputDebug',
-    name: 'Input Debug',
-    component: InputDebug,
-    defaultSize: { w: 4, h: 4 },
-    minSize: { w: 3, h: 3 },
-  },
   InputChart: {
     id: 'InputChart',
     name: 'Input Chart',
@@ -144,5 +138,19 @@ export const WIDGET_REGISTRY: Record<string, WidgetMeta> = {
     component: LapHistory,
     defaultSize: { w: 5, h: 4 },
     minSize: { w: 4, h: 3 },
+  },
+  TimeWidget: {
+    id: 'TimeWidget',
+    name: 'Time',
+    component: TimeWidget,
+    defaultSize: { w: 3, h: 3 },
+    minSize: { w: 2, h: 2 },
+  },
+  Flags: {
+    id: 'Flags',
+    name: 'Flags',
+    component: Flags,
+    defaultSize: { w: 3, h: 3 },
+    minSize: { w: 2, h: 2 },
   },
 }

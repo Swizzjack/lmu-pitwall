@@ -181,14 +181,28 @@ export default function Standings() {
                   #{v.car_number}
                 </span>
 
-                {/* Driver name */}
+                {/* Driver name + PIT badge */}
                 <span style={{
-                  fontFamily: fonts.body, fontSize: 15,
-                  color: isPlayer ? colors.primary : colors.text,
+                  display: 'flex', alignItems: 'center', gap: 4,
                   flex: showCarName ? '2 1 140px' : 1,
-                  overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
+                  overflow: 'hidden', minWidth: 0,
                 }}>
-                  {isPlayer ? `★ ${v.driver_name || `Car #${v.id}`}` : (v.driver_name || `Car #${v.id}`)}
+                  <span style={{
+                    fontFamily: fonts.body, fontSize: 15,
+                    color: isPlayer ? colors.primary : colors.text,
+                    overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0,
+                  }}>
+                    {isPlayer ? `★ ${v.driver_name || `Car #${v.id}`}` : (v.driver_name || `Car #${v.id}`)}
+                  </span>
+                  {v.in_pits && (
+                    <span style={{
+                      fontFamily: fonts.mono, fontSize: 10, fontWeight: 700,
+                      color: '#f97316', background: '#f9731622', border: '1px solid #f9731666',
+                      borderRadius: 3, padding: '1px 4px', flexShrink: 0, lineHeight: 1.4,
+                    }}>
+                      PIT
+                    </span>
+                  )}
                 </span>
 
                 {/* Vehicle name (hidden when narrow) */}

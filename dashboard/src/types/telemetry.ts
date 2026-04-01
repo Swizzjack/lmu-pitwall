@@ -11,6 +11,7 @@ export interface TireData {
   temp_inner: number
   temp_mid: number
   temp_outer: number
+  carcass_temp: number
   pressure: number
   wear: number
   brake_temp: number
@@ -136,7 +137,7 @@ export interface TelemetryUpdate {
   fuel_pit_detected: boolean      // true for ~3s after pit stop detected
   fuel_avg_lap_time: number       // rolling median lap time (s); 0 = no valid data yet
   ve_history: number[] | null     // per-lap VE values from REST API (0–1 each); null = unavailable
-  ve_available: boolean | null    // true if car supports VE (from garage API); null = not yet fetched
+  ve_available: boolean | null    // true if car supports VE; null = not yet determined
 }
 
 export interface ScoringUpdate {
@@ -159,28 +160,29 @@ export interface SessionInfo {
 
 export interface ElectronicsUpdate {
   type: 'ElectronicsUpdate'
-  // Button-counted values
   tc: number
+  tc_max: number
   tc_cut: number
+  tc_cut_max: number
   tc_slip: number
+  tc_slip_max: number
   abs: number
+  abs_max: number
   engine_map: number
+  engine_map_max: number
   front_arb: number
+  front_arb_max: number
   rear_arb: number
-  brake_bias: number          // button-counted bias in %, e.g. 56.0
-  regen: number
+  rear_arb_max: number
+  brake_bias: number           // front bias percent, e.g. 56.0
+  regen: number                // kW
   brake_migration: number
   brake_migration_max: number
-  // From telemetry (raw sensor)
-  brake_bias_front: number    // 0.0–1.0
-  // From LMU extended (hybrid cars only)
-  battery_pct: number         // 0.0–1.0; 0 if not hybrid
-  energy_pct: number          // 0.0–1.0; 0 if not hybrid
-  // Config status
-  buttons_configured: boolean // false → show setup hint
-  // In-game display labels from garage API (e.g. "front_arb" → "P4", "engine_map" → "40kW")
-  // Empty object when no garage data has been fetched yet
-  garage_labels: Record<string, string>
+  battery_pct: number          // 0.0–1.0
+  soc: number                  // state of charge
+  virtual_energy: number       // virtual energy
+  tc_active: boolean           // TC intervening right now
+  abs_active: boolean          // ABS intervening right now
 }
 
 export interface VehicleStatusUpdate {
@@ -194,12 +196,13 @@ export interface VehicleStatusUpdate {
   tire_flat: [boolean, boolean, boolean, boolean]      // FL, FR, RL, RR
   tire_detached: [boolean, boolean, boolean, boolean]  // FL, FR, RL, RR
   // Race flags (from scoring + rules)
-  yellow_flag_state: number  // -1=none, 0=pending, 1=pits closed, 2=pits open, 3=last lap, 4=resume, 5=race halt
+  yellow_flag_state: number  // -1=no scoring, 0=none, 1=pending, 2=pits closed, 3=pit lead lap, 4=pits open, 5=last lap, 6=resume, 7=race halt
   sector_flags: [number, number, number]  // S1, S2, S3 local yellow
   start_light: number        // 0=off, 1-5=red lights, 6=green
   game_phase: number         // 0=garage, 5=green, 6=full-caution, 7=stopped, 8=over
-  player_flag: number        // 0=green,1=blue,2=yellow,3=white,4=checkered,5=red,6=black
-  player_under_yellow: boolean   // mUnderYellow from rF2
+  player_flag: number        // mFlag: SDK only uses 0=no flag (green), 6=blue
+  individual_phase: number   // mIndividualPhase: 10=under yellow — authoritative per-vehicle yellow indicator
+  player_under_yellow: boolean   // mUnderYellow: FCY only (crossed S/F under FCY)
   player_sector: number          // 1=S1, 2=S2, 0=S3, -1=unknown
   safety_car_active: boolean
   safety_car_exists: boolean
@@ -211,71 +214,6 @@ export interface ConnectionStatus {
   plugin_version: string
 }
 
-// ---------------------------------------------------------------------------
-// Electronics config types (Settings / Binding UI)
-// ---------------------------------------------------------------------------
-
-export type InputBinding =
-  | { type: 'keyboard'; key: string }
-  | { type: 'joystick'; device_index: number; button: number }
-
-export interface ElectronicsDefaults {
-  tc: number
-  tc_cut: number
-  tc_slip: number
-  abs: number
-  engine_map: number
-  front_arb: number
-  rear_arb: number
-  brake_bias: number   // percentage, e.g. 56.0
-  regen: number
-  brake_migration: number
-}
-
-export interface ConfigState {
-  type: 'ConfigState'
-  bindings: Record<string, InputBinding | null>
-  defaults: ElectronicsDefaults
-}
-
-export interface BindingCaptured {
-  type: 'BindingCaptured'
-  binding_id: string
-  binding: InputBinding
-}
-
-export interface BindingTimeout {
-  type: 'BindingTimeout'
-  binding_id: string
-}
-
-export interface ConfigSaved {
-  type: 'ConfigSaved'
-  success: boolean
-}
-
-export interface ControllerDiag {
-  index: number
-  name: string
-  button_count: number
-  connected: boolean
-}
-
-export interface InputEventDiag {
-  timestamp_ms: number
-  source: string    // "keyboard" | "joystick:0"
-  input: string     // "F5" | "Button 15"
-  action: string    // "pressed"
-  mapped_to: string // "tc_increase"
-}
-
-export interface InputDiagnostics {
-  type: 'InputDiagnostics'
-  controllers: ControllerDiag[]
-  recent_events: InputEventDiag[]
-  capture_mode: boolean
-}
-
 export type ServerMessage =
   | TelemetryUpdate
   | ScoringUpdate
@@ -284,19 +222,3 @@ export type ServerMessage =
   | VehicleStatusUpdate
   | ConnectionStatus
   | AllDriversUpdate
-  | ConfigState
-  | BindingCaptured
-  | BindingTimeout
-  | ConfigSaved
-  | InputDiagnostics
-
-// ---------------------------------------------------------------------------
-// Client → Bridge commands (sent as JSON text frames)
-// ---------------------------------------------------------------------------
-
-export type ClientCommand =
-  | { command: 'start_binding_capture'; binding_id: string }
-  | { command: 'cancel_binding_capture' }
-  | { command: 'clear_binding'; binding_id: string }
-  | { command: 'update_defaults'; defaults: ElectronicsDefaults }
-  | { command: 'save_config' }

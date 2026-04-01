@@ -98,8 +98,8 @@ function TireCell({ label, tire, size, mirror = false }: { label: string; tire: 
   const toDisplayPressure = useSettingsStore((s) => s.toDisplayPressure)
   const pressureUnitLabel = useSettingsStore((s) => s.pressureUnitLabel)
 
-  const avgTempC        = (tire.temp_inner + tire.temp_mid + tire.temp_outer) / 3
-  const avgTempDisplay  = toDisplayTemp(avgTempC)
+  const carcassTempC     = tire.carcass_temp
+  const carcassTempDisplay = toDisplayTemp(carcassTempC)
   const pressureDisplay = toDisplayPressure(tire.pressure)
   const pressureDec     = pressureUnitLabel() === 'psi' ? 0 : 1
 
@@ -110,7 +110,7 @@ function TireCell({ label, tire, size, mirror = false }: { label: string; tire: 
   const brakeCol         = brakeColorC(brakeTempC)
 
   // No data sentinel: all fields zero means game not connected / garage
-  const hasData = avgTempC !== 0 || tire.pressure !== 0 || tire.brake_temp !== 0
+  const hasData = carcassTempC !== 0 || tire.pressure !== 0 || tire.brake_temp !== 0
 
   const txt = (sz: number, col: string): React.CSSProperties => ({
     fontFamily: fonts.mono,
@@ -161,7 +161,7 @@ function TireCell({ label, tire, size, mirror = false }: { label: string; tire: 
             ))}
           </div>
           <span style={txt(15, colors.text)}>
-            {hasData && avgTempC > 0 ? `${Math.round(avgTempDisplay)}${tempUnitLabel()}` : '--'}
+            {hasData && carcassTempC > 0 ? `${Math.round(carcassTempDisplay)}${tempUnitLabel()}` : '--'}
           </span>
           <span style={txt(15, colors.textMuted)}>
             {hasData && tire.pressure > 0 ? `${pressureDisplay.toFixed(pressureDec)} ${pressureUnitLabel()}` : '--'}
@@ -211,7 +211,7 @@ export default function TireMonitor() {
     return () => ro.disconnect()
   }, [])
 
-  const defaultTire: TireData = { temp_inner: 0, temp_mid: 0, temp_outer: 0, pressure: 0, wear: 0, brake_temp: 0 }
+  const defaultTire: TireData = { temp_inner: 0, temp_mid: 0, temp_outer: 0, carcass_temp: 0, pressure: 0, wear: 0, brake_temp: 0 }
   const [fl, fr, rl, rr] = tires ?? [defaultTire, defaultTire, defaultTire, defaultTire]
 
   const gap     = size === 'tiny' ? 6 : 8

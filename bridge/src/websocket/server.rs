@@ -7,13 +7,12 @@ use std::sync::{
 use anyhow::Result;
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::TcpStream;
-use tokio::sync::{broadcast, watch, RwLock};
+use tokio::sync::{broadcast, watch};
 use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, info, warn};
 
-use crate::app_config::AppConfig;
-use crate::protocol::messages::{ClientCommand, ServerMessage};
+use crate::protocol::messages::ServerMessage;
 
 /// Broadcast channel capacity — number of queued messages per slow client
 /// before older messages are dropped (lagged receiver).
@@ -32,10 +31,6 @@ pub enum Format {
 ///
 /// Accepts clients on `ws://0.0.0.0:<port>` and fans out every
 /// [`ServerMessage`] sent via [`broadcast`] to all connected clients.
-///
-/// Format selection per client:
-/// - Default: MessagePack binary (`Message::Binary`)
-/// - JSON mode: connect with `?format=json` (`Message::Text`)
 pub struct WebSocketServer {
     port: u16,
     tx: broadcast::Sender<Arc<ServerMessage>>,
@@ -43,10 +38,6 @@ pub struct WebSocketServer {
     client_count: Arc<AtomicUsize>,
     /// Watch channel — subscribers receive the new count on every change.
     count_tx: watch::Sender<usize>,
-    /// Forward client commands to the polling task.
-    cmd_tx: tokio::sync::mpsc::Sender<ClientCommand>,
-    /// Shared config — read on connect to send ConfigState to new clients.
-    app_config: Arc<RwLock<AppConfig>>,
     /// Latest AllDriversUpdate — sent immediately to newly connecting clients.
     all_drivers_rx: watch::Receiver<Option<ServerMessage>>,
 }
@@ -54,8 +45,6 @@ pub struct WebSocketServer {
 impl WebSocketServer {
     pub fn new(
         port: u16,
-        cmd_tx: tokio::sync::mpsc::Sender<ClientCommand>,
-        app_config: Arc<RwLock<AppConfig>>,
         all_drivers_rx: watch::Receiver<Option<ServerMessage>>,
     ) -> Self {
         let (tx, _) = broadcast::channel(BROADCAST_CAPACITY);
@@ -65,8 +54,6 @@ impl WebSocketServer {
             tx,
             client_count: Arc::new(AtomicUsize::new(0)),
             count_tx,
-            cmd_tx,
-            app_config,
             all_drivers_rx,
         }
     }
@@ -107,8 +94,6 @@ impl WebSocketServer {
             rx,
             self.client_count.clone(),
             self.count_tx.clone(),
-            self.cmd_tx.clone(),
-            self.app_config.clone(),
             self.all_drivers_rx.clone(),
         ));
     }
@@ -124,8 +109,6 @@ async fn handle_client(
     mut rx: broadcast::Receiver<Arc<ServerMessage>>,
     client_count: Arc<AtomicUsize>,
     count_tx: watch::Sender<usize>,
-    cmd_tx: tokio::sync::mpsc::Sender<ClientCommand>,
-    app_config: Arc<RwLock<AppConfig>>,
     all_drivers_rx: watch::Receiver<Option<ServerMessage>>,
 ) {
     let is_json = Arc::new(AtomicBool::new(false));
@@ -162,18 +145,6 @@ async fn handle_client(
     info!("Client {} connected (format: {:?})", peer, fmt);
 
     let (mut sink, mut incoming) = ws.split();
-
-    // Send current config state immediately to the connecting client.
-    {
-        let cfg = app_config.read().await;
-        let config_msg = ServerMessage::ConfigState {
-            bindings: cfg.electronics_bindings.to_map(),
-            defaults: cfg.electronics_defaults.clone(),
-        };
-        if let Ok(ws_msg) = serialize(&config_msg, fmt) {
-            let _ = sink.send(ws_msg).await;
-        }
-    }
 
     // Send the latest AllDriversUpdate snapshot immediately on connect so the
     // frontend doesn't wait until the next car crosses the S/F line.
@@ -216,7 +187,7 @@ async fn handle_client(
                 }
             }
 
-            // Inbound: parse text frames as ClientCommand and forward to polling task.
+            // Inbound: close frames and ignore other incoming frames.
             frame = incoming.next() => {
                 match frame {
                     Some(Ok(Message::Close(_))) | None => {
@@ -227,20 +198,8 @@ async fn handle_client(
                         debug!("Client {} connection error: {}", peer, e);
                         break;
                     }
-                    Some(Ok(Message::Text(text))) => {
-                        match serde_json::from_str::<ClientCommand>(&text) {
-                            Ok(cmd) => {
-                                if cmd_tx.send(cmd).await.is_err() {
-                                    debug!("Command channel closed, dropping command from {}", peer);
-                                }
-                            }
-                            Err(e) => {
-                                warn!("Invalid command from {}: {}", peer, e);
-                            }
-                        }
-                    }
                     Some(Ok(_)) => {
-                        // Binary frames and Ping/Pong handled automatically.
+                        // All other frames ignored.
                     }
                 }
             }

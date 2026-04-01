@@ -1,89 +1,83 @@
-import { useRef, useEffect, useState } from 'react'
+import React, { useRef, useState, useEffect } from 'react'
 import { useTelemetryStore } from '../../stores/telemetryStore'
-import { useElectronicsConfigStore } from '../../stores/electronicsConfigStore'
-import { colors, fonts } from '../../styles/theme'
 
 // ---------------------------------------------------------------------------
 // Flash-on-change hook
-// Returns true for 300 ms whenever `value` changes, then false.
 // ---------------------------------------------------------------------------
-function useFlash(value: unknown) {
+
+function useFlash(value: number | boolean, durationMs = 300) {
   const [flashing, setFlashing] = useState(false)
   const prev = useRef(value)
+
   useEffect(() => {
     if (prev.current !== value) {
       prev.current = value
       setFlashing(true)
-      const t = setTimeout(() => setFlashing(false), 300)
+      const t = setTimeout(() => setFlashing(false), durationMs)
       return () => clearTimeout(t)
     }
-  }, [value])
+  }, [value, durationMs])
+
   return flashing
 }
 
 // ---------------------------------------------------------------------------
-// Single "cell" — label + big value, flashes yellow on change
+// Section divider with label
 // ---------------------------------------------------------------------------
-function Cell({ label, value }: { label: string; value: string | number }) {
-  const flashing = useFlash(value)
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <div style={{
-      flex: 1,
-      minWidth: 0,
-      background: '#1a1a1a',
-      border: '1px solid #2a2a2a',
-      borderRadius: 4,
-      padding: '5px 6px',
-      display: 'flex',
-      flexDirection: 'column',
-      alignItems: 'center',
-      gap: 2,
-    }}>
-      <span style={{
-        fontFamily: fonts.heading,
-        fontSize: 20,
-        lineHeight: 1,
-        color: flashing ? '#facc15' : colors.text,
-        transition: 'color 0.3s',
-        whiteSpace: 'nowrap',
-        overflow: 'hidden',
-        textOverflow: 'ellipsis',
-        maxWidth: '100%',
-      }}>
-        {value}
+    <div className="flex items-center gap-2 w-full">
+      <div className="h-px flex-1 bg-neutral-700/50" />
+      <span className="text-[8px] font-semibold uppercase tracking-[0.15em] text-neutral-600">
+        {children}
       </span>
-      <span style={{
-        fontFamily: fonts.body,
-        fontSize: 13,
-        color: colors.textMuted,
-        textTransform: 'uppercase' as const,
-        letterSpacing: 1,
-        lineHeight: 1,
-      }}>
-        {label}
-      </span>
+      <div className="h-px flex-1 bg-neutral-700/50" />
     </div>
   )
 }
 
 // ---------------------------------------------------------------------------
-// Brake Bias text row (button-counted %)
+// Individual cell — large value, small label, de-emphasised /max
 // ---------------------------------------------------------------------------
-function BrakeBiasRow({ biasPct }: { biasPct: number }) {
-  const flashing = useFlash(biasPct.toFixed(1))
+
+interface CellProps {
+  label: string
+  value: number
+  max?: number
+  unit?: string
+  highlight?: boolean
+  precision?: number
+}
+
+function Cell({ label, value, max, unit, highlight, precision = 0 }: CellProps) {
+  const flash = useFlash(value)
+  const bg = highlight
+    ? 'bg-yellow-500/20 border-yellow-400/60'
+    : flash
+      ? 'bg-yellow-400/15 border-neutral-700'
+      : 'bg-neutral-800/60 border-neutral-700'
+
+  const formatted = precision > 0 ? value.toFixed(precision) : String(value)
+
   return (
-    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-      <span style={{ fontFamily: fonts.body, fontSize: 15, color: colors.textMuted, textTransform: 'uppercase' as const, letterSpacing: 1 }}>
-        Brake Bias
+    <div
+      className={`flex flex-col items-center justify-center rounded border px-3 py-2 min-w-[52px] transition-colors duration-150 ${bg}`}
+    >
+      <span className="text-[9px] font-medium uppercase tracking-widest text-neutral-500 mb-0.5">
+        {label}
       </span>
-      <span style={{
-        fontFamily: fonts.heading,
-        fontSize: 15,
-        color: flashing ? '#facc15' : colors.text,
-        transition: 'color 0.3s',
-      }}>
-        {biasPct.toFixed(1)}% F
-      </span>
+      <div className="flex items-baseline tabular-nums leading-none">
+        <span className={`text-2xl font-bold ${highlight ? 'text-yellow-300' : 'text-yellow-400'}`}>
+          {formatted}
+        </span>
+        {max != null && max > 0 && (
+          <span className="text-xs font-medium text-neutral-600 ml-0.5">/{max}</span>
+        )}
+        {unit && (
+          <span className="text-xs font-medium text-neutral-400 ml-0.5">{unit}</span>
+        )}
+      </div>
     </div>
   )
 }
@@ -91,119 +85,97 @@ function BrakeBiasRow({ biasPct }: { biasPct: number }) {
 // ---------------------------------------------------------------------------
 // Main widget
 // ---------------------------------------------------------------------------
+
 export default function Electronics() {
   const elec = useTelemetryStore((s) => s.electronics)
-  const cfgBindings = useElectronicsConfigStore((s) => s.bindings)
 
-  const hasAnyBinding = Object.values(cfgBindings).some((b) => b !== null)
-  const hasBmig   = elec.brake_migration_max > 0
-  const hasRegen  = elec.regen > 0
+  const {
+    tc, tc_max, tc_cut, tc_cut_max, tc_slip, tc_slip_max,
+    abs, abs_max, engine_map, engine_map_max,
+    front_arb, front_arb_max, rear_arb, rear_arb_max,
+    brake_bias, brake_migration, brake_migration_max,
+    virtual_energy,
+    tc_active, abs_active,
+  } = elec
+
+  const brakeBiasFlash = useFlash(brake_bias)
+
+  const hasTc     = tc_max > 0 || tc_cut_max > 0 || tc_slip_max > 0
+  const hasAbs    = abs_max > 0
+  const hasMap    = engine_map_max > 0
+  const hasArb    = front_arb_max > 0 || rear_arb_max > 0
+  const hasMig    = brake_migration_max > 0
+  const hasHybrid = virtual_energy > 0
 
   return (
-    <div style={{
-      width: '100%',
-      height: '100%',
-      display: 'flex',
-      flexDirection: 'column',
-      padding: '8px 10px',
-      gap: 6,
-      boxSizing: 'border-box',
-      overflow: 'hidden',
-    }}>
-      {/* Header */}
-      <span style={{
-        fontFamily: fonts.body,
-        fontSize: 15,
-        color: colors.textMuted,
-        letterSpacing: 2,
-        textTransform: 'uppercase' as const,
-        flexShrink: 0,
-      }}>
-        Electronics
-      </span>
+    <div className="flex flex-col gap-3 rounded-lg bg-neutral-900 p-4">
 
-      {!elec.buttons_configured ? (
-        <div style={{
-          flex: 1,
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          justifyContent: 'center',
-          gap: 6,
-          textAlign: 'center',
-        }}>
-          {hasAnyBinding ? (
-            /* Bindings saved but LMU not running yet */
-            <span style={{ fontFamily: fonts.body, fontSize: 15, color: colors.textMuted, lineHeight: 1.6 }}>
-              Waiting for session…
-            </span>
-          ) : (
-            /* No bindings configured at all */
-            <span style={{ fontFamily: fonts.body, fontSize: 15, color: colors.textMuted, lineHeight: 1.6 }}>
-              No buttons configured.{'\n'}
-              Please go to{' '}
-              <span style={{ color: '#facc15' }}>⚙ Settings</span>{' '}
-              → Electronics Setup{'\n'}
-              to assign buttons.
-            </span>
+      {/* Row 1: TC / ABS (left) + MAP (right) */}
+      {(hasTc || hasAbs || hasMap) && (
+        <div className="flex items-start gap-4">
+          {(hasTc || hasAbs) && (
+            <div className="flex flex-col gap-2 flex-1">
+              <SectionLabel>Traction Control</SectionLabel>
+              <div className="flex gap-2">
+                {tc_max > 0      && <Cell label="TC"   value={tc}      max={tc_max}      highlight={tc_active} />}
+                {tc_cut_max > 0  && <Cell label="CUT"  value={tc_cut}  max={tc_cut_max} />}
+                {tc_slip_max > 0 && <Cell label="SLIP" value={tc_slip} max={tc_slip_max} />}
+                {abs_max > 0     && <Cell label="ABS"  value={abs}     max={abs_max}     highlight={abs_active} />}
+              </div>
+            </div>
+          )}
+          {hasMap && (
+            <div className="flex flex-col gap-2">
+              <SectionLabel>Engine</SectionLabel>
+              <Cell label="MAP" value={engine_map} max={engine_map_max} />
+            </div>
           )}
         </div>
-      ) : (
-        <>
-          {/* Row 1: TC / TC CUT / TC SLIP / ABS / MAP */}
-          <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
-            <Cell label="TC"      value={elec.tc} />
-            <Cell label="TC CUT"  value={elec.tc_cut} />
-            <Cell label="TC SLIP" value={elec.tc_slip} />
-            <Cell label="ABS"     value={elec.abs} />
-            <Cell label="MAP"     value={elec.engine_map} />
-          </div>
-
-          {/* Row 2: FARB / RARB / REGEN (optional) / BMIG (optional) */}
-          <div style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
-            <Cell label="FARB" value={elec.front_arb} />
-            <Cell label="RARB" value={elec.rear_arb} />
-            {hasRegen && <Cell label="REGEN" value={elec.regen} />}
-            {hasBmig  && <Cell label="BMIG"  value={elec.brake_migration} />}
-          </div>
-
-          {/* Brake Bias text */}
-          <BrakeBiasRow biasPct={elec.brake_bias} />
-        </>
       )}
 
-      {/* Info note + Settings hint */}
-      <div style={{
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        gap: 8,
-        flexShrink: 0,
-        marginTop: 'auto',
-      }}>
-        <span
-          title="Values are counted from configured defaults or garage API on session start. Button presses increment/decrement the counter."
-          style={{
-            fontFamily: fonts.body,
-            fontSize: 13,
-            color: '#737373',
-            cursor: 'default',
-            userSelect: 'none',
-          }}
+      {/* Row 2: Anti-Roll Bar (left) + Energy (right) */}
+      {(hasArb || hasMig || hasHybrid) && (
+        <div className="flex items-start gap-4">
+          {hasArb && (
+            <div className="flex flex-col gap-2 flex-1">
+              <SectionLabel>Anti-Roll Bar</SectionLabel>
+              <div className="flex gap-2">
+                {front_arb_max > 0 && <Cell label="FRONT" value={front_arb} max={front_arb_max} />}
+                {rear_arb_max  > 0 && <Cell label="REAR"  value={rear_arb}  max={rear_arb_max} />}
+              </div>
+            </div>
+          )}
+          {(hasMig || hasHybrid) && (
+            <div className="flex flex-col gap-2">
+              <SectionLabel>Energy</SectionLabel>
+              <div className="flex gap-2">
+                {hasMig    && <Cell label="BMIG" value={brake_migration} max={brake_migration_max} />}
+                {hasHybrid && <Cell label="VE" value={Math.round(virtual_energy * 100)} unit="%" />}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Row 4: Brake Bias — full width, most prominent item */}
+      <div className="flex flex-col gap-2">
+        <SectionLabel>Brake Bias</SectionLabel>
+        <div
+          className={`w-full rounded border px-4 py-3 text-center transition-colors duration-150 ${
+            brakeBiasFlash
+              ? 'border-yellow-400/60 bg-yellow-400/10'
+              : 'border-neutral-700 bg-neutral-800/60'
+          }`}
         >
-          ⓘ Button-counted from session start
-        </span>
-        {elec.buttons_configured && (
-          <span style={{
-            fontFamily: fonts.body,
-            fontSize: 13,
-            color: '#737373',
-            flexShrink: 0,
-          }}>
-            Bindings: ⚙ Settings
-          </span>
-        )}
+          <div className="flex items-baseline justify-center tabular-nums leading-none">
+            <span className="text-3xl font-bold text-yellow-400">
+              {brake_bias.toFixed(1)}
+            </span>
+            <span className="text-sm font-medium text-neutral-400 ml-1">% F</span>
+          </div>
+        </div>
       </div>
+
     </div>
   )
 }

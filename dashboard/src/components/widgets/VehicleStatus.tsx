@@ -5,7 +5,9 @@ import { colors, fonts } from '../../styles/theme'
 // Body damage zone labels (rF2 mDentSeverity[8] — approx. front→rear)
 // ---------------------------------------------------------------------------
 
-const DENT_ZONES = ['FRONT', 'REAR', 'LEFT', 'RIGHT', 'F/L', 'F/R', 'R/L', 'R/R']
+// rF2/LMU mDentSeverity[8] zone order (counterclockwise from front):
+// 0=front, 1=front-left, 2=left, 3=right, 4=rear-left, 5=rear-right, 6=rear, 7=front-right
+const DENT_ZONES = ['FRONT', 'F/L', 'LEFT', 'RIGHT', 'R/L', 'R/R', 'REAR', 'F/R']
 
 function dentColor(severity: number): string {
   if (severity === 2) return colors.danger

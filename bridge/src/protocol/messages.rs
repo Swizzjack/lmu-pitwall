@@ -1,9 +1,6 @@
-use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
-use crate::app_config::{ButtonBinding, ElectronicsDefaults};
 
 /// WebSocket message protocol — MessagePack serialized
-/// Task 4 will complete all message types
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Vec3 {
@@ -17,6 +14,7 @@ pub struct TireData {
     pub temp_inner: f64,
     pub temp_mid: f64,
     pub temp_outer: f64,
+    pub carcass_temp: f64,
     pub pressure: f64,
     pub wear: f64,
     pub brake_temp: f64,
@@ -27,25 +25,6 @@ pub struct WeatherData {
     pub air_temp: f64,
     pub track_temp: f64,
     pub rain_intensity: f64,
-}
-
-/// Diagnostic info for one HID game controller.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct ControllerDiag {
-    pub index: u32,
-    pub name: String,
-    pub button_count: u32,
-    pub connected: bool,
-}
-
-/// One entry in the recent input event log.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct InputEventDiag {
-    pub timestamp_ms: u64,  // ms since bridge start
-    pub source: String,     // "keyboard" or "joystick:0"
-    pub input: String,      // "F5" or "Button 15"
-    pub action: String,     // "pressed"
-    pub mapped_to: String,  // "tc_increase" (always mapped; unmapped events not tracked)
 }
 
 /// Tire snapshot for one wheel at S/F line crossing (telemetry at lap completion).
@@ -162,8 +141,8 @@ pub enum ServerMessage {
         // Virtual Energy history from REST API (strategy/usage) — None if unavailable
         // Each entry is one lap's VE fraction (0.0–1.0). Last entry = current VE level.
         ve_history: Option<Vec<f64>>,
-        // Whether this car supports VE (from VM_VIRTUAL_ENERGY.available in garage API).
-        // None = garage data not yet fetched.
+        // Whether this car supports VE.
+        // None = not yet determined.
         ve_available: Option<bool>,
     },
 
@@ -185,34 +164,31 @@ pub enum ServerMessage {
         session_minutes: f64,
     },
 
-    /// Low frequency: ~5Hz — electronics / driver aids (button counting)
-    ///
-    /// Values are tracked by counting steering-wheel button presses since
-    /// session start (or last reset). `buttons_configured` is false when
-    /// all bindings in config.json are null — the frontend shows a setup hint.
+    /// Low frequency: ~5Hz — electronics / driver aids (native telemetry)
     ElectronicsUpdate {
-        // Button-counted values (from ElectronicsTracker)
-        tc:                  i32,   // traction control level
-        tc_cut:              i32,   // TC cut level
-        tc_slip:             i32,   // TC slip threshold
-        abs:                 i32,   // ABS level
-        engine_map:          i32,   // engine/motor map number
-        front_arb:           i32,   // front anti-roll bar
-        rear_arb:            i32,   // rear anti-roll bar
-        brake_bias:          f64,   // button-counted brake bias (%) e.g. 56.0
-        regen:               i32,   // regen level
-        brake_migration:     i32,   // brake migration step
-        brake_migration_max: i32,   // max step (from range config)
-        // From telemetry (raw sensor, not button counted)
-        brake_bias_front:    f64,   // front brake bias (0.0–1.0) from mRearBrakeBias
-        // From LMU extended buffer (hybrid cars only)
-        battery_pct:         f64,   // battery charge (0.0–1.0); 0 if not hybrid
-        energy_pct:          f64,   // energy store   (0.0–1.0); 0 if not hybrid
-        // Config status
-        buttons_configured:  bool,  // true if at least one binding is set in config.json
-        // In-game display labels from garage API (e.g. "front_arb" → "P4", "engine_map" → "40kW").
-        // Empty map when no garage fetch has succeeded yet.
-        garage_labels:       HashMap<String, String>,
+        tc: u8,
+        tc_max: u8,
+        tc_cut: u8,
+        tc_cut_max: u8,
+        tc_slip: u8,
+        tc_slip_max: u8,
+        abs: u8,
+        abs_max: u8,
+        engine_map: u8,
+        engine_map_max: u8,
+        front_arb: u8,
+        front_arb_max: u8,
+        rear_arb: u8,
+        rear_arb_max: u8,
+        brake_bias: f64,         // front bias percent
+        regen: f32,              // kW
+        brake_migration: u8,
+        brake_migration_max: u8,
+        battery_pct: f64,        // 0.0–1.0
+        soc: f32,                // state of charge
+        virtual_energy: f32,     // virtual energy
+        tc_active: bool,         // TC intervening right now
+        abs_active: bool,        // ABS intervening right now
     },
 
     /// Vehicle status: damage + race flags — ~5Hz
@@ -230,8 +206,9 @@ pub enum ServerMessage {
         sector_flags:         [i32; 3],    // local yellow per sector (S1, S2, S3): 0=clear, >0=yellow
         start_light:          u8,          // 0=off, 1-5=red lights, 6=green
         game_phase:           u8,          // 0=garage, 5=green, 6=full-caution, 7=stopped, 8=over
-        player_flag:          u8,          // flag shown to player: 0=green,1=blue,2=yellow,3=white,4=checkered,5=red,6=black
-        player_under_yellow:  bool,        // mUnderYellow for player vehicle
+        player_flag:          u8,          // mFlag for player: SDK only uses 0=no flag (green), 6=blue
+        individual_phase:     u8,          // mIndividualPhase: 10=under yellow, 11=under blue (unused)
+        player_under_yellow:  bool,        // mUnderYellow for player vehicle (FCY only)
         player_sector:        i32,         // player's current sector: 1=S1, 2=S2, 0=S3, -1=unknown
         safety_car_active:    bool,        // safety car currently deployed
         safety_car_exists:    bool,        // safety car configured for this session
@@ -243,28 +220,6 @@ pub enum ServerMessage {
         plugin_version: String,
     },
 
-    /// Sent to a client on connect + after any config change.
-    ConfigState {
-        bindings: HashMap<String, Option<ButtonBinding>>,
-        defaults: ElectronicsDefaults,
-    },
-
-    /// Sent when a button press was captured during binding capture mode.
-    BindingCaptured {
-        binding_id: String,
-        binding: ButtonBinding,
-    },
-
-    /// Sent when binding capture timed out (10 s) without a button press.
-    BindingTimeout {
-        binding_id: String,
-    },
-
-    /// Sent after a SaveConfig command completes.
-    ConfigSaved {
-        success: bool,
-    },
-
     /// All-drivers lap snapshot — sent when any car crosses the S/F line,
     /// and once immediately on client connect as initial state.
     /// Contains the latest snapshot per driver (updated at each S/F crossing).
@@ -273,13 +228,6 @@ pub enum ServerMessage {
         session_time: f64,
         drivers: Vec<DriverLapSnapshot>,
     },
-
-    /// Input diagnostics — sent every 500 ms and on client connect.
-    InputDiagnostics {
-        controllers: Vec<ControllerDiag>,
-        recent_events: Vec<InputEventDiag>,
-        capture_mode: bool,
-    },
 }
 
 // ---------------------------------------------------------------------------
@@ -287,17 +235,7 @@ pub enum ServerMessage {
 // ---------------------------------------------------------------------------
 
 /// Commands sent from the browser dashboard to the bridge over WebSocket text frames.
+/// Currently no commands are defined — all electronics values come directly from telemetry.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
-pub enum ClientCommand {
-    /// Start listening for the next button press and bind it to `binding_id`.
-    StartBindingCapture { binding_id: String },
-    /// Abort the current binding capture without changing anything.
-    CancelBindingCapture,
-    /// Remove the binding for `binding_id`.
-    ClearBinding { binding_id: String },
-    /// Update electronics default values (applied on next session reset).
-    UpdateDefaults { defaults: ElectronicsDefaults },
-    /// Write current config (bindings + defaults) to disk.
-    SaveConfig,
-}
+pub enum ClientCommand {}

@@ -86,7 +86,10 @@ pub struct rF2Wheel {
     pub mTireCarcassTemperature: f64,        // rough average carcass temperature (Kelvin)
     pub mTireInnerLayerTemperature: [f64; 3],// rough average inner-layer temperatures (Kelvin)
 
-    pub mExpansion: [u8; 24],                // reserved for future use
+    pub mOptimalTemp: f32,                   // optimal tire temperature
+    pub mCompoundIndex: u8,                  // compound index
+    pub mCompoundType: u8,                   // compound type
+    pub mExpansion: [u8; 18],                // reserved for future use (was 24)
 }
 
 // ---------------------------------------------------------------------------
@@ -186,6 +189,7 @@ pub struct rF2VehicleTelemetry {
     pub mTurboBoostPressure: f64,           // turbo boost (bar)
     pub mPhysicsToGraphicsOffset: [f32; 3], // physics→graphics centre offset
     pub mPhysicalSteeringWheelRange: f32,   // physical lock-to-lock range (degrees)
+    pub mDeltaBest: f64,                    // delta to personal best lap (seconds)
 
     // --- hybrid / electric motor ---
     pub mBatteryChargeFraction: f64,        // battery charge [0.0-1.0]
@@ -195,8 +199,51 @@ pub struct rF2VehicleTelemetry {
     pub mElectricBoostWaterTemperature: f64,// boost motor coolant temperature (Celsius; 0 if absent)
     pub mElectricBoostMotorState: u8,       // 0=unavailable,1=inactive,2=propulsion,3=regen
 
-    // --- future use ---
-    pub mExpansion: [u8; 111],
+    // --- LMU v1.3: electronics / driver aids (native) ---
+    pub mLapInvalidated: u8,                // 1 if current lap invalidated
+    pub mABSActive: u8,                     // 1 if ABS currently intervening
+    pub mTCActive: u8,                      // 1 if TC currently intervening
+    pub mSpeedLimiterActive: u8,            // 1 if speed limiter currently active
+    pub mWiperState: u8,                    // wiper state
+
+    pub mTC: u8,                            // traction control level
+    pub mTCMax: u8,                         // TC max level for this car
+    pub mTCSlip: u8,                        // TC slip threshold
+    pub mTCSlipMax: u8,                     // TC slip max
+    pub mTCCut: u8,                         // TC cut level
+    pub mTCCutMax: u8,                      // TC cut max
+
+    pub mABS: u8,                           // ABS level
+    pub mABSMax: u8,                        // ABS max level for this car
+
+    pub mMotorMap: u8,                      // engine/motor map
+    pub mMotorMapMax: u8,                   // motor map max
+
+    pub mMigration: u8,                     // brake migration step
+    pub mMigrationMax: u8,                  // brake migration max
+
+    pub mFrontAntiSway: u8,                 // front anti-roll bar level
+    pub mFrontAntiSwayMax: u8,              // front ARB max
+    pub mRearAntiSway: u8,                  // rear anti-roll bar level
+    pub mRearAntiSwayMax: u8,               // rear ARB max
+
+    pub mLiftAndCoastProgress: u8,          // lift-and-coast progress
+    pub mTrackLimitsSteps: u8,              // normalized track limits points
+
+    pub mRegen: f32,                        // regeneration (kW)
+    pub mSoC: f32,                          // state of charge
+    pub mVirtualEnergy: f32,               // virtual energy fraction
+
+    pub mTimeGapCarAhead: f32,             // time gap to car directly ahead (s)
+    pub mTimeGapCarBehind: f32,            // time gap to car directly behind (s)
+    pub mTimeGapPlaceAhead: f32,           // time gap to position ahead (s)
+    pub mTimeGapPlaceBehind: f32,          // time gap to position behind (s)
+
+    pub mVehicleModel: [u8; 30],            // vehicle model name
+    pub mVehicleClassEnum: u8,              // IP_VehicleClass enum (0=Hypercar, 5=GT3, ...)
+    pub mVehicleChampionshipEnum: u8,       // IP_VehicleChampionship enum
+
+    pub mExpansion: [u8; 20],               // remaining future-use bytes
 
     // --- wheels (FL=0, FR=1, RL=2, RR=3) --- MUST BE LAST
     pub mWheels: [rF2Wheel; 4],

@@ -1,5 +1,5 @@
 #define MyAppName "LMU Pitwall"
-#define MyAppVersion "1.0.48"
+#define MyAppVersion "1.0.58"
 #define MyAppPublisher "Swizzjack"
 #define MyAppURL "https://vrh.gg"
 #define MyAppExeName "lmu-pitwall.exe"

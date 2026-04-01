@@ -7,7 +7,6 @@ import type {
   ServerMessage,
   ElectronicsUpdate,
   VehicleStatusUpdate,
-  InputDiagnostics,
 } from '../types/telemetry'
 import type { ConnectionStatus } from '../hooks/useWebSocket'
 
@@ -81,7 +80,6 @@ interface SessionSection {
 // Omit the 'type' discriminator — we only store the data
 type ElectronicsSection = Omit<ElectronicsUpdate, 'type'>
 type VehicleStatusSection = Omit<VehicleStatusUpdate, 'type'>
-type InputDiagnosticsSection = Omit<InputDiagnostics, 'type'>
 
 interface AllDriversSection {
   session_type: string
@@ -106,7 +104,6 @@ interface TelemetryStore {
   session: SessionSection
   electronics: ElectronicsSection
   vehicleStatus: VehicleStatusSection
-  inputDiagnostics: InputDiagnosticsSection
   allDrivers: AllDriversSection
   connection: ConnectionSection
   lapHistory: LapEntry[]
@@ -125,6 +122,7 @@ const defaultTire: TireData = {
   temp_inner: 0,
   temp_mid: 0,
   temp_outer: 0,
+  carcass_temp: 0,
   pressure: 0,
   wear: 0,
   brake_temp: 0,
@@ -182,21 +180,28 @@ const defaultSession: SessionSection = {
 
 const defaultElectronics: ElectronicsSection = {
   tc: 0,
+  tc_max: 0,
   tc_cut: 0,
+  tc_cut_max: 0,
   tc_slip: 0,
+  tc_slip_max: 0,
   abs: 0,
+  abs_max: 0,
   engine_map: 0,
+  engine_map_max: 0,
   front_arb: 0,
+  front_arb_max: 0,
   rear_arb: 0,
+  rear_arb_max: 0,
   brake_bias: 56.0,
   regen: 0,
   brake_migration: 0,
-  brake_migration_max: 10,
-  brake_bias_front: 0.5,
+  brake_migration_max: 0,
   battery_pct: 0,
-  energy_pct: 0,
-  buttons_configured: false,
-  garage_labels: {},
+  soc: 0,
+  virtual_energy: 0,
+  tc_active: false,
+  abs_active: false,
 }
 
 const defaultVehicleStatus: VehicleStatusSection = {
@@ -212,16 +217,11 @@ const defaultVehicleStatus: VehicleStatusSection = {
   start_light: 0,
   game_phase: 0,
   player_flag: 0,
+  individual_phase: 0,
   player_under_yellow: false,
   player_sector: -1,
   safety_car_active: false,
   safety_car_exists: false,
-}
-
-const defaultInputDiagnostics: InputDiagnosticsSection = {
-  controllers: [],
-  recent_events: [],
-  capture_mode: false,
 }
 
 const defaultConnection: ConnectionSection = {
@@ -257,7 +257,6 @@ export const useTelemetryStore = create<TelemetryStore>((set) => ({
   session: defaultSession,
   electronics: defaultElectronics,
   vehicleStatus: defaultVehicleStatus,
-  inputDiagnostics: defaultInputDiagnostics,
   allDrivers: defaultAllDrivers,
   connection: defaultConnection,
   lapHistory: [],
@@ -366,22 +365,29 @@ export const useTelemetryStore = create<TelemetryStore>((set) => ({
       case 'ElectronicsUpdate':
         set({
           electronics: {
-            tc:                  msg.tc,
-            tc_cut:              msg.tc_cut,
-            tc_slip:             msg.tc_slip,
-            abs:                 msg.abs,
-            engine_map:          msg.engine_map,
-            front_arb:           msg.front_arb,
-            rear_arb:            msg.rear_arb,
-            brake_bias:          msg.brake_bias,
-            regen:               msg.regen,
-            brake_migration:     msg.brake_migration,
+            tc: msg.tc,
+            tc_max: msg.tc_max,
+            tc_cut: msg.tc_cut,
+            tc_cut_max: msg.tc_cut_max,
+            tc_slip: msg.tc_slip,
+            tc_slip_max: msg.tc_slip_max,
+            abs: msg.abs,
+            abs_max: msg.abs_max,
+            engine_map: msg.engine_map,
+            engine_map_max: msg.engine_map_max,
+            front_arb: msg.front_arb,
+            front_arb_max: msg.front_arb_max,
+            rear_arb: msg.rear_arb,
+            rear_arb_max: msg.rear_arb_max,
+            brake_bias: msg.brake_bias,
+            regen: msg.regen,
+            brake_migration: msg.brake_migration,
             brake_migration_max: msg.brake_migration_max,
-            brake_bias_front:    msg.brake_bias_front,
-            battery_pct:         msg.battery_pct,
-            energy_pct:          msg.energy_pct,
-            buttons_configured:  msg.buttons_configured,
-            garage_labels:       msg.garage_labels,
+            battery_pct: msg.battery_pct,
+            soc: msg.soc,
+            virtual_energy: msg.virtual_energy,
+            tc_active: msg.tc_active,
+            abs_active: msg.abs_active,
           },
         })
         break
@@ -401,6 +407,7 @@ export const useTelemetryStore = create<TelemetryStore>((set) => ({
             start_light:           msg.start_light,
             game_phase:            msg.game_phase,
             player_flag:           msg.player_flag,
+            individual_phase:      msg.individual_phase,
             player_under_yellow:   msg.player_under_yellow,
             player_sector:         msg.player_sector,
             safety_car_active:     msg.safety_car_active,
@@ -426,16 +433,6 @@ export const useTelemetryStore = create<TelemetryStore>((set) => ({
             session_time: msg.session_time,
             drivers: msg.drivers,
             lastUpdated: Date.now(),
-          },
-        })
-        break
-
-      case 'InputDiagnostics':
-        set({
-          inputDiagnostics: {
-            controllers: msg.controllers,
-            recent_events: msg.recent_events,
-            capture_mode: msg.capture_mode,
           },
         })
         break

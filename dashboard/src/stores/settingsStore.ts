@@ -6,6 +6,7 @@ export type TempUnit = 'celsius' | 'fahrenheit'
 export type PressureUnit = 'bar' | 'psi'
 export type FuelUnit = 'liters' | 'gallons'
 export type FpsLimit = 0 | 30 | 60
+export type ClockFormat = '12h' | '24h'
 
 export interface SettingsState {
   speedUnit: SpeedUnit
@@ -19,6 +20,12 @@ export interface SettingsState {
   accentColor: string
   fpsLimit: FpsLimit
   fullscreen: boolean
+  // Time Widget
+  timeWidgetShowComputerTime: boolean
+  timeWidgetClockFormat: ClockFormat
+  timeWidgetShowSessionElapsed: boolean
+  timeWidgetShowTimeRemaining: boolean
+  timeWidgetShowCurrentLap: boolean
 }
 
 interface SettingsStore extends SettingsState {
@@ -49,6 +56,12 @@ export const SETTINGS_DEFAULTS: SettingsState = {
   accentColor: '#f97316',
   fpsLimit: 0,
   fullscreen: false,
+  // Time Widget
+  timeWidgetShowComputerTime: true,
+  timeWidgetClockFormat: '24h',
+  timeWidgetShowSessionElapsed: true,
+  timeWidgetShowTimeRemaining: true,
+  timeWidgetShowCurrentLap: false,
 }
 
 export const useSettingsStore = create<SettingsStore>()(
@@ -61,8 +74,10 @@ export const useSettingsStore = create<SettingsStore>()(
       reset: () => set(SETTINGS_DEFAULTS),
 
       exportSettings: () => {
-        const { speedUnit, tempUnit, pressureUnit, fuelUnit, lapReserve, wsHost, wsPort, primaryColor, accentColor, fpsLimit } = get()
-        return JSON.stringify({ speedUnit, tempUnit, pressureUnit, fuelUnit, lapReserve, wsHost, wsPort, primaryColor, accentColor, fpsLimit }, null, 2)
+        const { speedUnit, tempUnit, pressureUnit, fuelUnit, lapReserve, wsHost, wsPort, primaryColor, accentColor, fpsLimit,
+          timeWidgetShowComputerTime, timeWidgetClockFormat, timeWidgetShowSessionElapsed, timeWidgetShowTimeRemaining, timeWidgetShowCurrentLap } = get()
+        return JSON.stringify({ speedUnit, tempUnit, pressureUnit, fuelUnit, lapReserve, wsHost, wsPort, primaryColor, accentColor, fpsLimit,
+          timeWidgetShowComputerTime, timeWidgetClockFormat, timeWidgetShowSessionElapsed, timeWidgetShowTimeRemaining, timeWidgetShowCurrentLap }, null, 2)
       },
 
       importSettings: (json) => {
@@ -79,6 +94,11 @@ export const useSettingsStore = create<SettingsStore>()(
           if (typeof data.primaryColor === 'string') valid.primaryColor = data.primaryColor
           if (typeof data.accentColor === 'string') valid.accentColor = data.accentColor
           if (data.fpsLimit === 0 || data.fpsLimit === 30 || data.fpsLimit === 60) valid.fpsLimit = data.fpsLimit
+          if (typeof data.timeWidgetShowComputerTime === 'boolean') valid.timeWidgetShowComputerTime = data.timeWidgetShowComputerTime
+          if (data.timeWidgetClockFormat === '12h' || data.timeWidgetClockFormat === '24h') valid.timeWidgetClockFormat = data.timeWidgetClockFormat
+          if (typeof data.timeWidgetShowSessionElapsed === 'boolean') valid.timeWidgetShowSessionElapsed = data.timeWidgetShowSessionElapsed
+          if (typeof data.timeWidgetShowTimeRemaining === 'boolean') valid.timeWidgetShowTimeRemaining = data.timeWidgetShowTimeRemaining
+          if (typeof data.timeWidgetShowCurrentLap === 'boolean') valid.timeWidgetShowCurrentLap = data.timeWidgetShowCurrentLap
           set(valid)
           return true
         } catch {

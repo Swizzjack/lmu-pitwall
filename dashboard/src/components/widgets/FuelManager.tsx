@@ -60,13 +60,12 @@ export default function FuelManager() {
   const stintLaps        = useTelemetryStore((s) => s.telemetry.fuel_stint_laps)
   const pitDetected      = useTelemetryStore((s) => s.telemetry.fuel_pit_detected)
   const avgLapTimeFromBridge = useTelemetryStore((s) => s.telemetry.fuel_avg_lap_time)
-  const currentEt        = useTelemetryStore((s) => s.telemetry.current_et)
-  const lapStartEt       = useTelemetryStore((s) => s.telemetry.lap_start_et)
   const sessionMinutes   = useTelemetryStore((s) => s.session.session_minutes)
   const sessionTime      = useTelemetryStore((s) => s.scoring.session_time)
   const scoring          = useTelemetryStore((s) => s.scoring)
   const veHistory        = useTelemetryStore((s) => s.telemetry.ve_history)
   const veAvailable      = useTelemetryStore((s) => s.telemetry.ve_available)
+  const virtualEnergy    = useTelemetryStore((s) => s.electronics.virtual_energy)
 
   const toDisplayFuel = useSettingsStore((s) => s.toDisplayFuel)
   const fuelUnitLabel = useSettingsStore((s) => s.fuelUnitLabel)
@@ -93,18 +92,6 @@ export default function FuelManager() {
   // --- Virtual Energy (current state + history) from REST API ---
   const lastKnownVe = veHistory && veHistory.length > 0 ? veHistory[veHistory.length - 1] : null
   const veConsPerLap = veHistory ? veConsumptionPerLap(veHistory) : null
-
-  // Interpolate VE within the current lap so the refuel value stays stable.
-  // strategy/usage only updates at lap crossings; we estimate the current VE
-  // by subtracting the fraction of the lap already driven × avg VE per lap.
-  const currentVe = (() => {
-    if (lastKnownVe === null || veConsPerLap === null || !isValidLapTime(avgLapTime)) {
-      return lastKnownVe
-    }
-    const timeIntoLap = Math.max(0, currentEt - lapStartEt)
-    const lapProgress = Math.min(1, timeIntoLap / avgLapTime)
-    return Math.max(0, lastKnownVe - lapProgress * veConsPerLap)
-  })()
 
   // --- Remaining time ---
   const remainingSec = sessionMinutes > 0
@@ -213,8 +200,8 @@ export default function FuelManager() {
         </div>
       </div>
 
-      {/* Virtual Energy current state — only shown when REST API provides a value */}
-      {currentVe !== null && (
+      {/* Virtual Energy current state — live value from shared memory */}
+      {virtualEnergy > 0 && (
         <div style={{
           display: 'flex', alignItems: 'center', gap: 8,
           background: '#111', borderRadius: 4, padding: '4px 8px',
@@ -225,14 +212,14 @@ export default function FuelManager() {
           }}>
             VE
           </span>
-          <span style={{ fontFamily: fonts.heading, fontSize: 16, color: veBarColor(currentVe), minWidth: 44, textAlign: 'right' }}>
-            {(currentVe * 100).toFixed(0)}%
+          <span style={{ fontFamily: fonts.heading, fontSize: 16, color: veBarColor(virtualEnergy), minWidth: 44, textAlign: 'right' }}>
+            {Math.round(virtualEnergy * 100)}%
           </span>
           <div style={{ flex: 1, height: 6, background: '#1a1a1a', borderRadius: 3, overflow: 'hidden' }}>
             <div style={{
               height: '100%',
-              width: `${Math.min(currentVe * 100, 100)}%`,
-              background: veBarColor(currentVe),
+              width: `${Math.min(virtualEnergy * 100, 100)}%`,
+              background: veBarColor(virtualEnergy),
               borderRadius: 3,
               transition: 'width 0.3s, background 0.3s',
             }} />

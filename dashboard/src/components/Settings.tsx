@@ -1,40 +1,12 @@
 import { useRef, useState, useEffect } from 'react'
 import { useSettingsStore, SETTINGS_DEFAULTS } from '../stores/settingsStore'
-import { useElectronicsConfigStore } from '../stores/electronicsConfigStore'
-import type { FpsLimit, SpeedUnit, TempUnit, PressureUnit, FuelUnit } from '../stores/settingsStore'
+import type { FpsLimit, SpeedUnit, TempUnit, PressureUnit, FuelUnit, ClockFormat } from '../stores/settingsStore'
 import { colors, fonts } from '../styles/theme'
-import BindingDialog from './BindingDialog'
 
 interface Props {
   open: boolean
   onClose: () => void
 }
-
-// Human-readable labels for each binding ID
-const BINDING_LABELS: Record<string, string> = {
-  tc_increase:              'TC +',
-  tc_decrease:              'TC −',
-  tc_cut_increase:          'TC Cut +',
-  tc_cut_decrease:          'TC Cut −',
-  tc_slip_increase:         'TC Slip +',
-  tc_slip_decrease:         'TC Slip −',
-  abs_increase:             'ABS +',
-  abs_decrease:             'ABS −',
-  engine_map_increase:      'Map +',
-  engine_map_decrease:      'Map −',
-  farb_increase:            'FARB +',
-  farb_decrease:            'FARB −',
-  rarb_increase:            'RARB +',
-  rarb_decrease:            'RARB −',
-  brake_bias_increase:      'Brake Bias +',
-  brake_bias_decrease:      'Brake Bias −',
-  regen_increase:           'Regen +',
-  regen_decrease:           'Regen −',
-  brake_migration_increase: 'BMIG +',
-  brake_migration_decrease: 'BMIG −',
-}
-
-const BINDING_IDS = Object.keys(BINDING_LABELS)
 
 // ---------------------------------------------------------------------------
 // Track Maps helpers
@@ -74,20 +46,9 @@ function getSavedTracks(): SavedTrackInfo[] {
   return tracks.sort((a, b) => a.trackName.localeCompare(b.trackName))
 }
 
-function formatBinding(b: { type: string; key?: string; device_index?: number; button?: number } | null | undefined): string {
-  if (!b) return '— not assigned —'
-  if (b.type === 'keyboard') return `Keyboard ${b.key ?? '?'}`
-  if (b.type === 'joystick') return `Joystick ${b.device_index ?? 0} Btn ${(b.button ?? 0) + 1}`
-  return '?'
-}
-
 export default function Settings({ open, onClose }: Props) {
   const s = useSettingsStore()
-  const cfg = useElectronicsConfigStore()
   const importRef = useRef<HTMLInputElement>(null)
-
-  // Which binding_id has the dialog open
-  const [dialogBindingId, setDialogBindingId] = useState<string | null>(null)
 
   // Track Maps
   const [savedTracks, setSavedTracks] = useState<SavedTrackInfo[]>([])
@@ -101,40 +62,6 @@ export default function Settings({ open, onClose }: Props) {
   function handleDeleteTrack(storageKey: string) {
     localStorage.removeItem(storageKey)
     setSavedTracks(getSavedTracks())
-  }
-
-  // ---- Duplicate-binding detection ----
-  function findConflict(bindingId: string): string | null {
-    const b = cfg.bindings[bindingId]
-    if (!b) return null
-    for (const [otherId, otherB] of Object.entries(cfg.bindings)) {
-      if (otherId === bindingId || !otherB) continue
-      if (otherB.type === 'keyboard' && b.type === 'keyboard' && otherB.key === (b as {type:'keyboard';key:string}).key) {
-        return BINDING_LABELS[otherId] ?? otherId
-      }
-      if (otherB.type === 'joystick' && b.type === 'joystick') {
-        const bj = b as {type:'joystick';device_index:number;button:number}
-        const oj = otherB as {type:'joystick';device_index:number;button:number}
-        if (oj.device_index === bj.device_index && oj.button === bj.button) {
-          return BINDING_LABELS[otherId] ?? otherId
-        }
-      }
-    }
-    return null
-  }
-
-  function handleBindClick(bindingId: string) {
-    setDialogBindingId(bindingId)
-    cfg.startCapture(bindingId)
-  }
-
-  function handleDialogClose() {
-    setDialogBindingId(null)
-  }
-
-  function handleSave() {
-    cfg.saveConfig()
-    onClose()
   }
 
   function handleCancel() {
@@ -325,128 +252,43 @@ export default function Settings({ open, onClose }: Props) {
             </Row>
           </Section>
 
-          {/* Electronics Setup */}
-          <Section title="Button Bindings">
-
-            {/* Button bindings */}
-            <div style={{
-              background: '#141414',
-              border: `1px solid ${colors.border}`,
-              borderRadius: 4,
-              overflow: 'hidden',
-            }}>
-              {BINDING_IDS.map((id, i) => {
-                const binding = cfg.bindings[id] ?? null
-                const conflict = findConflict(id)
-                const isCapturing = cfg.capturing === id
-                return (
-                  <div
-                    key={id}
-                    style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      gap: 6,
-                      padding: '5px 8px',
-                      borderBottom: i < BINDING_IDS.length - 1 ? `1px solid ${colors.border}` : 'none',
-                      background: isCapturing ? `${colors.primary}11` : 'transparent',
-                    }}
-                  >
-                    {/* Label */}
-                    <span style={{
-                      fontFamily: fonts.body,
-                      fontSize: 16,
-                      color: colors.textMuted,
-                      width: 110,
-                      flexShrink: 0,
-                    }}>
-                      {BINDING_LABELS[id]}
-                    </span>
-
-                    {/* Binding display */}
-                    <span style={{
-                      fontFamily: fonts.mono,
-                      fontSize: 15,
-                      color: conflict ? '#f97316' : (binding ? colors.text : colors.textMuted),
-                      flex: 1,
-                      overflow: 'hidden',
-                      textOverflow: 'ellipsis',
-                      whiteSpace: 'nowrap',
-                    }}
-                      title={conflict ? `Also assigned to: ${conflict}` : undefined}
-                    >
-                      {formatBinding(binding)}
-                      {conflict && ' ⚠'}
-                    </span>
-
-                    {/* Clear button */}
-                    <button
-                      onClick={() => cfg.clearBinding(id)}
-                      disabled={!binding}
-                      style={{
-                        fontFamily: fonts.mono,
-                        fontSize: 16,
-                        padding: '2px 7px',
-                        background: 'transparent',
-                        border: `1px solid ${binding ? '#ef4444' : colors.border}`,
-                        color: binding ? '#ef4444' : colors.border,
-                        borderRadius: 3,
-                        cursor: binding ? 'pointer' : 'default',
-                        flexShrink: 0,
-                      }}
-                      title="Clear binding"
-                    >
-                      ×
-                    </button>
-
-                    {/* Bind button */}
-                    <button
-                      onClick={() => handleBindClick(id)}
-                      disabled={cfg.capturing !== null && !isCapturing}
-                      style={{
-                        fontFamily: fonts.body,
-                        fontSize: 15,
-                        padding: '3px 10px',
-                        background: isCapturing ? `${colors.primary}22` : 'transparent',
-                        border: `1px solid ${isCapturing ? colors.primary : colors.primary + '88'}`,
-                        color: isCapturing ? colors.primary : colors.primary + 'aa',
-                        borderRadius: 3,
-                        cursor: cfg.capturing !== null && !isCapturing ? 'not-allowed' : 'pointer',
-                        flexShrink: 0,
-                        fontWeight: 600,
-                      }}
-                    >
-                      {isCapturing ? '...' : 'Bind'}
-                    </button>
-                  </div>
-                )
-              })}
-            </div>
-
-            <p style={{ fontFamily: fonts.body, fontSize: 15, color: colors.textMuted, margin: '4px 0 0' }}>
-              Bindings are active immediately. Save writes the config to disk.
-            </p>
-
-            {/* Save status */}
-            {cfg.saveStatus !== 'idle' && (
-              <div style={{
-                fontFamily: fonts.body,
-                fontSize: 16,
-                color: cfg.saveStatus === 'saved' ? colors.success : colors.danger,
-                textAlign: 'center',
-              }}>
-                {cfg.saveStatus === 'saved' ? 'Saved ✓' : 'Error saving ✗'}
-              </div>
-            )}
-
-            {/* Save / Cancel */}
-            <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end', marginTop: 4 }}>
-              <button onClick={handleCancel} style={cancelBtnStyle}>
-                Cancel
-              </button>
-              <button onClick={handleSave} style={saveBtnStyle}>
-                Save
-              </button>
-            </div>
+          {/* Time Widget */}
+          <Section title="Time Widget">
+            <Row label="Computer Time">
+              <SegmentControl
+                value={s.timeWidgetShowComputerTime ? 'on' : 'off'}
+                options={[{ value: 'on', label: 'On' }, { value: 'off', label: 'Off' }]}
+                onChange={(v) => s.update({ timeWidgetShowComputerTime: v === 'on' })}
+              />
+            </Row>
+            <Row label="Clock Format">
+              <SegmentControl
+                value={s.timeWidgetClockFormat}
+                options={[{ value: '24h', label: '24h' }, { value: '12h', label: '12h' }] as { value: ClockFormat; label: string }[]}
+                onChange={(v) => s.update({ timeWidgetClockFormat: v as ClockFormat })}
+              />
+            </Row>
+            <Row label="Session Elapsed">
+              <SegmentControl
+                value={s.timeWidgetShowSessionElapsed ? 'on' : 'off'}
+                options={[{ value: 'on', label: 'On' }, { value: 'off', label: 'Off' }]}
+                onChange={(v) => s.update({ timeWidgetShowSessionElapsed: v === 'on' })}
+              />
+            </Row>
+            <Row label="Time Remaining">
+              <SegmentControl
+                value={s.timeWidgetShowTimeRemaining ? 'on' : 'off'}
+                options={[{ value: 'on', label: 'On' }, { value: 'off', label: 'Off' }]}
+                onChange={(v) => s.update({ timeWidgetShowTimeRemaining: v === 'on' })}
+              />
+            </Row>
+            <Row label="Current Lap Time">
+              <SegmentControl
+                value={s.timeWidgetShowCurrentLap ? 'on' : 'off'}
+                options={[{ value: 'on', label: 'On' }, { value: 'off', label: 'Off' }]}
+                onChange={(v) => s.update({ timeWidgetShowCurrentLap: v === 'on' })}
+              />
+            </Row>
           </Section>
 
           {/* Track Maps */}
@@ -506,13 +348,6 @@ export default function Settings({ open, onClose }: Props) {
         </div>
       </div>
 
-      {/* Binding capture dialog */}
-      {dialogBindingId !== null && (
-        <BindingDialog
-          label={BINDING_LABELS[dialogBindingId] ?? dialogBindingId}
-          onClose={handleDialogClose}
-        />
-      )}
     </>
   )
 }
@@ -684,28 +519,6 @@ const inputStyle: React.CSSProperties = {
   width: 200,
 }
 
-const saveBtnStyle: React.CSSProperties = {
-  fontFamily: fonts.body,
-  fontSize: 18,
-  fontWeight: 700,
-  padding: '8px 20px',
-  background: colors.primary,
-  border: 'none',
-  color: '#0f0f0f',
-  borderRadius: 4,
-  cursor: 'pointer',
-}
-
-const cancelBtnStyle: React.CSSProperties = {
-  fontFamily: fonts.body,
-  fontSize: 18,
-  padding: '8px 20px',
-  background: colors.bgWidget,
-  border: `1px solid ${colors.border}`,
-  color: colors.textMuted,
-  borderRadius: 4,
-  cursor: 'pointer',
-}
 
 // Keep compiler happy
 void SETTINGS_DEFAULTS
