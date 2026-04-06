@@ -32,6 +32,26 @@ Grab the latest release from the [Releases page](https://github.com/Swizzjack/lm
 
 **Option B: Portable** — Download `lmu-pitwall.exe`, place it anywhere, and run it.
 
+Shared Memory Plugin (Required)
+LMU Pitwall reads telemetry data via the rF2 Shared Memory Plugin. Since LMU v1.3, this plugin is **no longer included** in a fresh LMU installation.
+
+**Check if the plugin is already installed:**  
+Navigate to your LMU installation folder and look for a `Plugins` directory:
+C:\Program Files (x86)\Steam\steamapps\common\Le Mans Ultimate\Plugins\
+
+If the folder exists and contains `rFactor2SharedMemoryMapPlugin64.dll`, you're good to go.
+
+**If the `Plugins` folder is missing:**  
+Download [Plugins.zip](https://github.com/Swizzjack/lmu-pitwall/releases/latest) from the latest release and extract it into your LMU installation folder so the structure looks like this:
+Le Mans Ultimate/
+├── Plugins/
+│   ├── rFactor2SharedMemoryMapPlugin64.dll
+│   ├── LMU_SharedMemoryMapPlugin64.dll
+│   └── CustomPluginVariables.json
+├── Bin/
+├── Core/
+└── ...
+
 ## Usage
 
 1. Start Le Mans Ultimate
