@@ -206,6 +206,20 @@ export default function TrackMap() {
     return () => clearInterval(id)
   }, [])  // run once; reads refs for fresh data
 
+  // Compute class positions: rank within each vehicle_class (sorted by overall position)
+  const classPositions = useMemo(() => {
+    const map = new Map<number, number>()
+    const byClass = new Map<string, number>()
+    const sorted = [...vehicles].sort((a, b) => a.position - b.position)
+    for (const v of sorted) {
+      const cls = v.vehicle_class || ''
+      const rank = (byClass.get(cls) ?? 0) + 1
+      byClass.set(cls, rank)
+      map.set(v.id, rank)
+    }
+    return map
+  }, [vehicles])
+
   // --------------------------------------------------------------------------
   // Render bounds:
   //   • When outline is complete → use stable outline.bounds (no jitter)
@@ -314,7 +328,7 @@ export default function TrackMap() {
                     fontFamily={fonts.body}
                     style={{ userSelect: 'none', pointerEvents: 'none' }}
                   >
-                    {v.position}
+                    {classPositions.get(v.id) ?? v.position}
                   </text>
                 </g>
               )

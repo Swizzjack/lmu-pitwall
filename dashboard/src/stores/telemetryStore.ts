@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type {
   TireData,
+  Vec3,
   WeatherData,
   VehicleScoring,
   DriverLapSnapshot,
@@ -44,6 +45,7 @@ interface TelemetrySection {
   water_temp: number
   oil_temp: number
   tires: [TireData, TireData, TireData, TireData] | null  // FL, FR, RL, RR
+  local_accel: Vec3
   delta_best: number
   current_et: number
   lap_start_et: number
@@ -146,6 +148,7 @@ const defaultTelemetry: TelemetrySection = {
   water_temp: 0,
   oil_temp: 0,
   tires: [defaultTire, defaultTire, defaultTire, defaultTire],
+  local_accel: { x: 0, y: 0, z: 0 },
   delta_best: 0,
   current_et: 0,
   lap_start_et: 0,
@@ -289,6 +292,7 @@ export const useTelemetryStore = create<TelemetryStore>((set) => ({
             water_temp: msg.water_temp,
             oil_temp: msg.oil_temp,
             tires: msg.tires,
+            local_accel: msg.local_accel,
             delta_best: msg.delta_best,
             current_et: msg.current_et,
             lap_start_et: msg.lap_start_et,

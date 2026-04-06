@@ -2,13 +2,16 @@ import { useRef, useEffect, useState } from 'react'
 import { useTelemetryStore } from '../../stores/telemetryStore'
 import { colors, fonts } from '../../styles/theme'
 
-type Channel = 'THR' | 'BRK' | 'CLT' | 'STEER'
+type Channel = 'THR' | 'BRK' | 'CLT' | 'STEER' | 'GX' | 'GZ' | 'REGEN'
 
 const CHANNEL_COLORS: Record<Channel, string> = {
   THR:   colors.success,  // green
   BRK:   colors.danger,   // red
   CLT:   colors.info,     // blue
   STEER: colors.primary,  // yellow
+  GX:    '#f97316',       // orange — lateral G
+  GZ:    '#06b6d4',       // cyan   — longitudinal G
+  REGEN: '#a855f7',       // purple — battery regen
 }
 
 const SPEED_OPTIONS = [
@@ -18,13 +21,18 @@ const SPEED_OPTIONS = [
 ]
 
 const MAX_SAMPLES = 1800  // 30Hz × 60s headroom
+const MAX_G       = 30    // m/s² — ±3G, covers typical LMU cars
+const MAX_REGEN   = 500   // kW upper bound for normalisation
 
 interface Sample {
   t:     number  // ms timestamp
   thr:   number  // 0–1
   brk:   number  // 0–1
   clt:   number  // 0–1
-  steer: number  // 0–1 (normalized from -1…+1)
+  steer: number  // 0–1 (normalised from -1…+1)
+  gx:    number  // 0–1 (±MAX_G, centred at 0.5 = 0G)
+  gz:    number  // 0–1 (±MAX_G, centred at 0.5 = 0G)
+  regen: number  // 0–1 (0–MAX_REGEN kW)
 }
 
 const CHANNEL_GETTERS: Record<Channel, (s: Sample) => number> = {
@@ -32,16 +40,20 @@ const CHANNEL_GETTERS: Record<Channel, (s: Sample) => number> = {
   BRK:   (s) => s.brk,
   CLT:   (s) => s.clt,
   STEER: (s) => s.steer,
+  GX:    (s) => s.gx,
+  GZ:    (s) => s.gz,
+  REGEN: (s) => s.regen,
 }
 
-const ALL_CHANNELS: Channel[] = ['THR', 'BRK', 'CLT', 'STEER']
+const BASE_CHANNELS: Channel[] = ['THR', 'BRK', 'CLT', 'STEER', 'GX', 'GZ']
+const ALL_CHANNELS:  Channel[] = [...BASE_CHANNELS, 'REGEN']
 
 export default function InputChart() {
-  const canvasRef   = useRef<HTMLCanvasElement>(null)
-  const wrapperRef  = useRef<HTMLDivElement>(null)
-  const samplesRef  = useRef<Sample[]>([])
-  const animRef     = useRef<number>(0)
-  const sizeRef     = useRef<{ w: number; h: number }>({ w: 0, h: 0 })
+  const canvasRef  = useRef<HTMLCanvasElement>(null)
+  const wrapperRef = useRef<HTMLDivElement>(null)
+  const samplesRef = useRef<Sample[]>([])
+  const animRef    = useRef<number>(0)
+  const sizeRef    = useRef<{ w: number; h: number }>({ w: 0, h: 0 })
 
   const [active, setActive] = useState<Set<Channel>>(() => {
     try {
@@ -52,8 +64,9 @@ export default function InputChart() {
         if (valid.length > 0) return new Set(valid)
       }
     } catch { /* ignore */ }
-    return new Set(ALL_CHANNELS)
+    return new Set<Channel>(['THR', 'BRK', 'CLT', 'STEER'])
   })
+
   const [speedIdx, setSpeedIdx] = useState(() => {
     try {
       const raw = localStorage.getItem('lmu-inputchart-speed')
@@ -65,11 +78,16 @@ export default function InputChart() {
     return 1  // default 15s
   })
 
-  // ── pull latest telemetry ──────────────────────────────────────────────────
-  const throttle = useTelemetryStore((s) => s.telemetry.throttle)
-  const brake    = useTelemetryStore((s) => s.telemetry.brake)
-  const clutch   = useTelemetryStore((s) => s.telemetry.clutch)
-  const steering = useTelemetryStore((s) => s.telemetry.steering)
+  // REGEN toggle only appears once we observe regen > 0 in the current session
+  const [regenAvailable, setRegenAvailable] = useState(false)
+
+  // ── pull latest telemetry ─────────────────────────────────────────────────
+  const throttle   = useTelemetryStore((s) => s.telemetry.throttle)
+  const brake      = useTelemetryStore((s) => s.telemetry.brake)
+  const clutch     = useTelemetryStore((s) => s.telemetry.clutch)
+  const steering   = useTelemetryStore((s) => s.telemetry.steering)
+  const localAccel = useTelemetryStore((s) => s.telemetry.local_accel)
+  const regenKw    = useTelemetryStore((s) => s.electronics.regen)
 
   // ── track container size via ResizeObserver ───────────────────────────────
   useEffect(() => {
@@ -85,10 +103,25 @@ export default function InputChart() {
 
   // ── push sample on every telemetry tick ───────────────────────────────────
   useEffect(() => {
+    if (regenKw > 0) setRegenAvailable(true)
+
+    // G values: map ±MAX_G → 0–1, centre 0G at 0.5
+    const gx = Math.min(Math.max((localAccel.x / MAX_G + 1) / 2, 0), 1)
+    const gz = Math.min(Math.max((localAccel.z / MAX_G + 1) / 2, 0), 1)
+
     const buf = samplesRef.current
-    buf.push({ t: Date.now(), thr: throttle, brk: brake, clt: clutch, steer: (steering + 1) / 2 })
+    buf.push({
+      t:     Date.now(),
+      thr:   throttle,
+      brk:   brake,
+      clt:   clutch,
+      steer: (steering + 1) / 2,
+      gx,
+      gz,
+      regen: Math.min(regenKw / MAX_REGEN, 1),
+    })
     if (buf.length > MAX_SAMPLES) buf.shift()
-  }, [throttle, brake, clutch, steering])
+  }, [throttle, brake, clutch, steering, localAccel, regenKw])
 
   // ── canvas render loop ────────────────────────────────────────────────────
   useEffect(() => {
@@ -100,7 +133,6 @@ export default function InputChart() {
       const ctx = canvas.getContext('2d')
       if (!ctx)   { animRef.current = requestAnimationFrame(draw); return }
 
-      // use ResizeObserver-tracked size for reliable horizontal scaling
       const { w, h } = sizeRef.current
       if (canvas.width !== w || canvas.height !== h) {
         canvas.width  = w
@@ -108,11 +140,11 @@ export default function InputChart() {
       }
       if (w === 0 || h === 0) { animRef.current = requestAnimationFrame(draw); return }
 
-      // background
       ctx.fillStyle = '#0a0a0a'
       ctx.fillRect(0, 0, w, h)
 
       // horizontal grid lines at 25 / 50 / 75 %
+      // For G channels the 50% line = 0G, which serves as a useful zero reference
       ctx.strokeStyle = '#1e1e1e'
       ctx.lineWidth   = 1
       for (const pct of [0.25, 0.5, 0.75]) {
@@ -170,11 +202,13 @@ export default function InputChart() {
     try { localStorage.setItem('lmu-inputchart-speed', String(idx)) } catch { /* ignore */ }
   }
 
+  const visibleChannels: Channel[] = regenAvailable ? ALL_CHANNELS : BASE_CHANNELS
+
   // ── render ─────────────────────────────────────────────────────────────────
   return (
     <div style={{ width: '100%', height: '100%', display: 'flex', flexDirection: 'column', gap: 4 }}>
 
-      {/* chart — ResizeObserver tracks actual container size for the canvas buffer */}
+      {/* chart */}
       <div ref={wrapperRef} style={{ flex: 1, position: 'relative', width: '100%', minHeight: 0 }}>
         <canvas
           ref={canvasRef}
@@ -192,24 +226,24 @@ export default function InputChart() {
       }}>
 
         {/* channel toggles */}
-        <div style={{ display: 'flex', gap: 4 }}>
-          {ALL_CHANNELS.map((ch) => {
+        <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+          {visibleChannels.map((ch) => {
             const on = active.has(ch)
             return (
               <button
                 key={ch}
                 onClick={() => toggleChannel(ch)}
                 style={{
-                  background:   on ? CHANNEL_COLORS[ch] + '22' : 'transparent',
-                  border:       `1px solid ${on ? CHANNEL_COLORS[ch] : '#333'}`,
-                  color:        on ? CHANNEL_COLORS[ch] : '#555',
-                  borderRadius: 3,
-                  padding:      '2px 7px',
-                  fontSize:     13,
-                  fontFamily:   fonts.mono,
-                  cursor:       'pointer',
+                  background:    on ? CHANNEL_COLORS[ch] + '22' : 'transparent',
+                  border:        `1px solid ${on ? CHANNEL_COLORS[ch] : '#333'}`,
+                  color:         on ? CHANNEL_COLORS[ch] : '#555',
+                  borderRadius:  3,
+                  padding:       '2px 7px',
+                  fontSize:      13,
+                  fontFamily:    fonts.mono,
+                  cursor:        'pointer',
                   letterSpacing: 0.5,
-                  transition:   'all 0.1s',
+                  transition:    'all 0.1s',
                 }}
               >
                 {ch}

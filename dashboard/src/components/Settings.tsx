@@ -291,6 +291,31 @@ export default function Settings({ open, onClose }: Props) {
             </Row>
           </Section>
 
+          {/* Standings Widget */}
+          <Section title="Standings Widget">
+            <Row label="Compound">
+              <SegmentControl
+                value={s.standingsShowCompound ? 'on' : 'off'}
+                options={[{ value: 'on', label: 'On' }, { value: 'off', label: 'Off' }]}
+                onChange={(v) => s.update({ standingsShowCompound: v === 'on' })}
+              />
+            </Row>
+            <Row label="Car Type">
+              <SegmentControl
+                value={s.standingsShowCarType ? 'on' : 'off'}
+                options={[{ value: 'on', label: 'On' }, { value: 'off', label: 'Off' }]}
+                onChange={(v) => s.update({ standingsShowCarType: v === 'on' })}
+              />
+            </Row>
+            <Row label="Virtual Energy">
+              <SegmentControl
+                value={s.standingsShowVE ? 'on' : 'off'}
+                options={[{ value: 'on', label: 'On' }, { value: 'off', label: 'Off' }]}
+                onChange={(v) => s.update({ standingsShowVE: v === 'on' })}
+              />
+            </Row>
+          </Section>
+
           {/* Track Maps */}
           <Section title="Track Maps">
             {savedTracks.length === 0 ? (

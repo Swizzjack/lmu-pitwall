@@ -54,6 +54,8 @@ export interface VehicleScoring {
   // Race gap
   time_behind_leader: number  // mTimeBehindLeader (s); 0.0 for leader
   laps_behind_leader: number  // mLapsBehindLeader; 0 = on lead lap
+  // Virtual Energy (0.0 = no VE / not a hybrid; >0 = fraction 0.0–1.0)
+  virtual_energy: number
 }
 
 // ---------------------------------------------------------------------------
@@ -68,6 +70,7 @@ export interface WheelSnapshot {
   pressure: number                          // tire pressure (kPa)
   flat: boolean
   detached: boolean
+  compound_index: number
 }
 
 export interface DriverLapSnapshot {
@@ -92,6 +95,8 @@ export interface DriverLapSnapshot {
   fuel_capacity: number
   tire_compound_front: number
   tire_compound_rear: number
+  tire_compound_front_name: string
+  tire_compound_rear_name: string
   wheels: [WheelSnapshot, WheelSnapshot, WheelSnapshot, WheelSnapshot] // FL, FR, RL, RR
   lap_start_et: number
   speed_ms: number

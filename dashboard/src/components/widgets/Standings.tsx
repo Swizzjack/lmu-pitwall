@@ -1,8 +1,31 @@
 import { useRef, useState, useEffect, useMemo } from 'react'
 import { useTelemetryStore } from '../../stores/telemetryStore'
+import { useSettingsStore } from '../../stores/settingsStore'
 import { colors, fonts } from '../../styles/theme'
 import { getClassColor } from '../../utils/classColors'
 import type { VehicleScoring } from '../../types/telemetry'
+
+function hexAlpha(hex: string, alpha: number): string {
+  const a = Math.round(alpha * 255).toString(16).padStart(2, '0')
+  return `${hex}${a}`
+}
+
+function ClassBadge({ position, vehicleClass }: { position: string; vehicleClass: string }) {
+  const base = getClassColor(vehicleClass)
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+      width: 44, height: 24, flexShrink: 0,
+      borderRadius: 4,
+      background: hexAlpha(base, 0.15),
+      border: `1px solid ${hexAlpha(base, 0.25)}`,
+      fontFamily: fonts.mono, fontSize: 11, fontWeight: 700,
+      color: base,
+    }}>
+      {position}
+    </span>
+  )
+}
 
 const SECTOR_PB = '#22c55e'   // green — personal best in this sector
 const SECTOR_SB = '#a855f7'   // purple — session best in this sector
@@ -40,6 +63,16 @@ function fmtGap(v: VehicleScoring, leader: VehicleScoring, isRace: boolean): str
   return fmtTimeDiff(diff)
 }
 
+function compoundColor(name: string): string {
+  const n = name.toLowerCase()
+  if (n.includes('soft') || n === 's')           return '#f5f5f5'   // white
+  if (n.includes('medium') || n === 'm')          return '#eab308'   // yellow
+  if (n.includes('hard') || n === 'h')            return '#ef4444'   // red
+  if (n.includes('wet') || n.includes('rain') || n.includes('inter')) return '#3b82f6' // blue
+  if (n.includes('slick'))                        return '#f97316'   // orange — LMU slick
+  return '#a3a3a3'  // neutral gray for unknown
+}
+
 function bestS2(v: VehicleScoring): number {
   return v.best_sector1 > 0 && v.best_sector2 > 0 ? v.best_sector2 - v.best_sector1 : -1
 }
@@ -67,8 +100,29 @@ export default function Standings() {
   const playerId = useTelemetryStore((s) => s.scoring.player_vehicle_id)
   const sessionType = useTelemetryStore((s) => s.scoring.session_type)
   const numVehicles = useTelemetryStore((s) => s.scoring.num_vehicles)
+  const allDrivers = useTelemetryStore((s) => s.allDrivers.drivers)
+  const settingShowCompound = useSettingsStore((s) => s.standingsShowCompound)
+  const settingShowCarType  = useSettingsStore((s) => s.standingsShowCarType)
+  const settingShowVE       = useSettingsStore((s) => s.standingsShowVE)
 
   const isRace = sessionType?.toLowerCase().includes('race') ?? false
+
+  // Build compound lookup: driver id → compound name
+  const compoundById = useMemo(() => {
+    const map = new Map<number, string>()
+    for (const d of allDrivers) {
+      const front = d.tire_compound_front_name ?? ''
+      const rear  = d.tire_compound_rear_name  ?? ''
+      if (!front && !rear) continue
+      // Use whichever name is non-empty; prefer front
+      map.set(d.id, front || rear)
+    }
+    if (map.size > 0) {
+      const sample = [...map.values()][0]
+      console.debug('[Standings] compound sample:', sample, '| map size:', map.size)
+    }
+    return map
+  }, [allDrivers])
 
   const sorted = [...vehicles].sort((a: VehicleScoring, b: VehicleScoring) => a.position - b.position)
   const leader = sorted[0]
@@ -86,8 +140,14 @@ export default function Standings() {
     return map
   }, [sorted])
 
-  // Car name column only when widget is wide enough
-  const showCarName = containerWidth >= 680
+  // Car name column only when widget is wide enough AND setting allows it
+  const showCarName = settingShowCarType && containerWidth >= 680
+
+  // VE column only when at least one vehicle has Virtual Energy data AND setting allows it
+  const hasVeData = settingShowVE && sorted.some((v) => (v.virtual_energy ?? 0) > 0)
+
+  // Compound column only when at least one driver has compound name data AND setting allows it
+  const hasCompoundData = settingShowCompound && compoundById.size > 0
 
   // Session best per sector and lap (minimum across all vehicles with valid data)
   const validNums = (arr: number[]) => arr.filter((x) => x > 0)
@@ -97,11 +157,13 @@ export default function Standings() {
   const sbLap = Math.min(...validNums(sorted.map((v) => v.best_lap_time)))
 
   // Column widths — sized for 13px mono strings
-  const W_POS = 32   // "P12"
-  const W_NUM = 40   // "#99"
-  const W_SEC = 58   // "88.888"
-  const W_LAP = 76   // "1:28.888"
-  const W_GAP = 72   // "+128.888"
+  const W_POS  = 44   // class position badge
+  const W_NUM  = 40   // "#99"
+  const W_SEC  = 58   // "88.888"
+  const W_LAP  = 76   // "1:28.888"
+  const W_GAP  = 72   // "+128.888"
+  const W_VE   = 52   // "100%"
+  const W_COMP = 52   // "Medium"
 
   const colHdr = (label: string, width: number, right = true) => (
     <span style={{
@@ -134,11 +196,13 @@ export default function Standings() {
           {colHdr('#', W_NUM)}
           <span style={{ fontFamily: fonts.body, fontSize: 13, color: colors.textMuted, flex: showCarName ? '2 1 140px' : 1, overflow: 'hidden' }}>DRIVER</span>
           {showCarName && <span style={{ fontFamily: fonts.body, fontSize: 13, color: colors.textMuted, flex: '1 1 80px', overflow: 'hidden' }}>CAR</span>}
+          {hasCompoundData && colHdr('COMP', W_COMP)}
+          {hasVeData && colHdr('VE', W_VE)}
           {colHdr('S1', W_SEC)}
           {colHdr('S2', W_SEC)}
           {colHdr('S3', W_SEC)}
           {colHdr('BEST LAP', W_LAP)}
-          {colHdr(isRace ? 'GAP' : 'GAP', W_GAP)}
+          {colHdr('GAP', W_GAP)}
         </div>
       )}
 
@@ -166,15 +230,11 @@ export default function Standings() {
                 borderLeft: isPlayer ? `2px solid ${colors.primary}` : '2px solid transparent',
                 marginBottom: 1,
               }}>
-                {/* Class position — colored by vehicle class */}
-                <span style={{
-                  fontFamily: fonts.mono, fontSize: 13,
-                  color: isPlayer ? colors.primary : getClassColor(v.vehicle_class),
-                  width: W_POS, textAlign: 'right', flexShrink: 0,
-                  fontWeight: isPlayer ? 700 : 400,
-                }}>
-                  P{classPositions.get(v.id) ?? v.position}
-                </span>
+                {/* Class position badge */}
+                <ClassBadge
+                  position={`P${classPositions.get(v.id) ?? v.position}`}
+                  vehicleClass={v.vehicle_class}
+                />
 
                 {/* Car number */}
                 <span style={{ fontFamily: fonts.mono, fontSize: 13, color: colors.primary, width: W_NUM, textAlign: 'right', flexShrink: 0 }}>
@@ -214,6 +274,41 @@ export default function Standings() {
                     {v.car_name}
                   </span>
                 )}
+
+                {/* Tire compound */}
+                {hasCompoundData && (() => {
+                  const name = compoundById.get(v.id) ?? ''
+                  const col  = name && name !== '?' ? compoundColor(name) : '#a3a3a3'
+                  const label = name || '?'
+                  return (
+                    <span style={{
+                      fontFamily: fonts.mono, fontSize: 11, fontWeight: 700,
+                      color: col, border: `1px solid ${col}88`,
+                      borderRadius: 3, padding: '1px 4px',
+                      width: W_COMP, textAlign: 'center', flexShrink: 0,
+                      overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                    }} title={name || 'Unknown'}>
+                      {label}
+                    </span>
+                  )
+                })()}
+
+                {/* Virtual Energy */}
+                {hasVeData && (() => {
+                  const ve = v.virtual_energy ?? 0
+                  const veColor = ve > 0.5 ? '#22c55e' : ve > 0.25 ? '#eab308' : ve > 0 ? '#ef4444' : colors.textMuted
+                  return (
+                    <span style={{
+                      fontFamily: fonts.mono, fontSize: 11, fontWeight: 700,
+                      color: veColor, border: `1px solid ${veColor}88`,
+                      background: `${veColor}22`,
+                      borderRadius: 3, padding: '1px 4px',
+                      width: W_VE, textAlign: 'center', flexShrink: 0,
+                    }}>
+                      {ve > 0 ? `${Math.round(ve * 100)}%` : '—'}
+                    </span>
+                  )
+                })()}
 
                 {/* Sector times */}
                 <span style={{ fontFamily: fonts.mono, fontSize: 13, color: cS1, width: W_SEC, textAlign: 'right', flexShrink: 0 }}>{fmtSec(vS1)}</span>

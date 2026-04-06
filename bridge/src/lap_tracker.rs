@@ -84,8 +84,8 @@ impl LapTracker {
                     any_new = true;
                 }
             } else {
-                // Update position and gaps on every tick even without a lap crossing
-                // so that the standing order stays current.
+                // Update position, gaps, and compound names on every tick even without
+                // a lap crossing so that the standing order and tire data stay current.
                 if let Some(snap) = self.snapshots.get_mut(&id) {
                     snap.position = v.mPlace as i32;
                     snap.gap_to_leader = v.mTimeBehindLeader;
@@ -93,6 +93,24 @@ impl LapTracker {
                     snap.gap_ahead = v.mTimeBehindNext;
                     snap.in_pits = v.mInPits != 0;
                     snap.finish_status = v.mFinishStatus;
+
+                    // Compound names come from the telemetry buffer (all vehicles).
+                    // Update and broadcast when they change (e.g. after a pit stop).
+                    if let Some(t) = tel {
+                        let tel_num = (t.mNumVehicles as usize).min(MAX_MAPPED_VEHICLES);
+                        if let Some(tv) = t.mVehicles[..tel_num].iter().find(|tv| tv.mID == id) {
+                            let front = bytes_to_str(&tv.mFrontTireCompoundName).to_string();
+                            let rear  = bytes_to_str(&tv.mRearTireCompoundName).to_string();
+                            if (!front.is_empty() || !rear.is_empty())
+                                && (snap.tire_compound_front_name != front
+                                    || snap.tire_compound_rear_name != rear)
+                            {
+                                snap.tire_compound_front_name = front;
+                                snap.tire_compound_rear_name  = rear;
+                                any_new = true;
+                            }
+                        }
+                    }
                 }
             }
 
@@ -173,6 +191,7 @@ fn build_snapshot(
             pressure: tv.mWheels[i].mPressure,
             flat: tv.mWheels[i].mFlat != 0,
             detached: tv.mWheels[i].mDetached != 0,
+            compound_index: tv.mWheels[i].mCompoundIndex,
         })
     } else {
         Default::default()
@@ -200,6 +219,12 @@ fn build_snapshot(
         fuel_capacity: tel_veh.map(|tv| tv.mFuelCapacity).unwrap_or(0.0),
         tire_compound_front: tel_veh.map(|tv| tv.mFrontTireCompoundIndex).unwrap_or(0),
         tire_compound_rear: tel_veh.map(|tv| tv.mRearTireCompoundIndex).unwrap_or(0),
+        tire_compound_front_name: tel_veh
+            .map(|tv| bytes_to_str(&tv.mFrontTireCompoundName).to_string())
+            .unwrap_or_default(),
+        tire_compound_rear_name: tel_veh
+            .map(|tv| bytes_to_str(&tv.mRearTireCompoundName).to_string())
+            .unwrap_or_default(),
         wheels,
         lap_start_et: v.mLapStartET,
         speed_ms,

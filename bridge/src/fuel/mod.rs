@@ -114,6 +114,24 @@ impl FuelTracker {
         }
         self.prev_fuel = Some(current_fuel);
 
+        // --- Session restart detection ---
+        // A restart of the same session keeps the same session key, so the outer
+        // session-change guard in main.rs does not fire.  The reliable signal is
+        // mTotalLaps dropping back below the last recorded lap number.  When that
+        // happens, discard all stale samples and re-initialise from scratch.
+        if self.last_lap_number >= 0 && current_lap < self.last_lap_number {
+            self.lap_fuel_samples.clear();
+            self.lap_time_samples.clear();
+            self.fuel_at_lap_start = None;
+            self.prev_fuel         = Some(current_fuel);
+            self.last_lap_number   = -1;
+            self.stint_number      = 1;
+            self.stint_start_lap   = current_lap;
+            self.stint_start_fuel  = current_fuel;
+            self.stint_laps        = 0;
+            self.pit_flash_ticks   = 0;
+        }
+
         // --- First valid update: initialise tracker state ---
         if self.last_lap_number < 0 {
             self.last_lap_number   = current_lap;

@@ -37,6 +37,7 @@ pub struct WheelSnapshot {
     pub pressure: f64,                    // tire pressure (kPa)
     pub flat: bool,
     pub detached: bool,
+    pub compound_index: u8,             // per-wheel compound index (mCompoundIndex)
 }
 
 /// Snapshot of one driver's state at S/F line crossing (lap completion).
@@ -64,6 +65,8 @@ pub struct DriverLapSnapshot {
     pub fuel_capacity: f64,
     pub tire_compound_front: u8,
     pub tire_compound_rear: u8,
+    pub tire_compound_front_name: String,
+    pub tire_compound_rear_name: String,
     pub wheels: [WheelSnapshot; 4],    // FL, FR, RL, RR
     pub lap_start_et: f64,
     pub speed_ms: f64,                 // speed at S/F crossing (m/s)
@@ -102,6 +105,8 @@ pub struct VehicleScoring {
     // Race gap (seconds / laps behind leader)
     pub time_behind_leader: f64,  // mTimeBehindLeader (s); 0.0 for leader
     pub laps_behind_leader: i32,  // mLapsBehindLeader; 0 = on lead lap
+    // Virtual Energy (0.0 = no VE / not a hybrid; >0 = fraction 0.0–1.0)
+    pub virtual_energy: f32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

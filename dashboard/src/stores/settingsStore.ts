@@ -26,6 +26,10 @@ export interface SettingsState {
   timeWidgetShowSessionElapsed: boolean
   timeWidgetShowTimeRemaining: boolean
   timeWidgetShowCurrentLap: boolean
+  // Standings Widget
+  standingsShowCompound: boolean
+  standingsShowCarType: boolean
+  standingsShowVE: boolean
 }
 
 interface SettingsStore extends SettingsState {
@@ -62,6 +66,10 @@ export const SETTINGS_DEFAULTS: SettingsState = {
   timeWidgetShowSessionElapsed: true,
   timeWidgetShowTimeRemaining: true,
   timeWidgetShowCurrentLap: false,
+  // Standings Widget
+  standingsShowCompound: true,
+  standingsShowCarType: true,
+  standingsShowVE: true,
 }
 
 export const useSettingsStore = create<SettingsStore>()(
@@ -75,9 +83,11 @@ export const useSettingsStore = create<SettingsStore>()(
 
       exportSettings: () => {
         const { speedUnit, tempUnit, pressureUnit, fuelUnit, lapReserve, wsHost, wsPort, primaryColor, accentColor, fpsLimit,
-          timeWidgetShowComputerTime, timeWidgetClockFormat, timeWidgetShowSessionElapsed, timeWidgetShowTimeRemaining, timeWidgetShowCurrentLap } = get()
+          timeWidgetShowComputerTime, timeWidgetClockFormat, timeWidgetShowSessionElapsed, timeWidgetShowTimeRemaining, timeWidgetShowCurrentLap,
+          standingsShowCompound, standingsShowCarType, standingsShowVE } = get()
         return JSON.stringify({ speedUnit, tempUnit, pressureUnit, fuelUnit, lapReserve, wsHost, wsPort, primaryColor, accentColor, fpsLimit,
-          timeWidgetShowComputerTime, timeWidgetClockFormat, timeWidgetShowSessionElapsed, timeWidgetShowTimeRemaining, timeWidgetShowCurrentLap }, null, 2)
+          timeWidgetShowComputerTime, timeWidgetClockFormat, timeWidgetShowSessionElapsed, timeWidgetShowTimeRemaining, timeWidgetShowCurrentLap,
+          standingsShowCompound, standingsShowCarType, standingsShowVE }, null, 2)
       },
 
       importSettings: (json) => {
@@ -99,6 +109,9 @@ export const useSettingsStore = create<SettingsStore>()(
           if (typeof data.timeWidgetShowSessionElapsed === 'boolean') valid.timeWidgetShowSessionElapsed = data.timeWidgetShowSessionElapsed
           if (typeof data.timeWidgetShowTimeRemaining === 'boolean') valid.timeWidgetShowTimeRemaining = data.timeWidgetShowTimeRemaining
           if (typeof data.timeWidgetShowCurrentLap === 'boolean') valid.timeWidgetShowCurrentLap = data.timeWidgetShowCurrentLap
+          if (typeof data.standingsShowCompound === 'boolean') valid.standingsShowCompound = data.standingsShowCompound
+          if (typeof data.standingsShowCarType === 'boolean') valid.standingsShowCarType = data.standingsShowCarType
+          if (typeof data.standingsShowVE === 'boolean') valid.standingsShowVE = data.standingsShowVE
           set(valid)
           return true
         } catch {

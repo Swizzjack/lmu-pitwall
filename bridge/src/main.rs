@@ -167,10 +167,19 @@ fn build_telemetry_update(
 }
 
 /// Build a ScoringUpdate and return the player slot ID found in scoring data.
-fn build_scoring_update(sc: &rF2ScoringBuffer) -> (ServerMessage, i32) {
+fn build_scoring_update(sc: &rF2ScoringBuffer, tel: Option<&rF2TelemetryBuffer>) -> (ServerMessage, i32) {
     let info = &sc.mScoringInfo;
     let num = (info.mNumVehicles as usize).min(MAX_MAPPED_VEHICLES);
     let mut player_id = -1i32;
+
+    // Build a lookup: vehicle ID → mVirtualEnergy from telemetry buffer
+    let ve_map: std::collections::HashMap<i32, f32> = tel.map(|t| {
+        let tel_num = (t.mNumVehicles as usize).min(MAX_MAPPED_VEHICLES);
+        t.mVehicles[..tel_num]
+            .iter()
+            .map(|tv| (tv.mID, tv.mVirtualEnergy))
+            .collect()
+    }).unwrap_or_default();
 
     let vehicles: Vec<VehicleScoring> = sc.mVehicles[..num]
         .iter()
@@ -212,6 +221,7 @@ fn build_scoring_update(sc: &rF2ScoringBuffer) -> (ServerMessage, i32) {
                 pos_z: v.mPos.z,
                 time_behind_leader: v.mTimeBehindLeader,
                 laps_behind_leader: v.mLapsBehindLeader,
+                virtual_energy: *ve_map.get(&v.mID).unwrap_or(&0.0),
             }
         })
         .collect();
@@ -658,7 +668,7 @@ async fn task_broadcaster(
             };
 
             let sc_result: Option<(ServerMessage, i32)> = if send_scoring {
-                s.scoring.as_ref().map(build_scoring_update)
+                s.scoring.as_ref().map(|sc| build_scoring_update(sc, s.telemetry.as_ref()))
             } else {
                 None
             };
