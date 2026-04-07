@@ -40,7 +40,7 @@ Le Mans Ultimate\Plugins\rFactor2SharedMemoryMapPlugin64.dll
 If the file exists, skip to step 3. If not, follow the full setup below.
 
 Step 1 — Install the plugin DLL
-Download rFactor2SharedMemoryMapPlugin64.dll from the latest release (or use the bundled Plugins.zip from the LMU Pitwall release page).
+Download rFactor2SharedMemoryMapPlugin64.dll from the latest release: https://github.com/TheIronWolfModding/rF2SharedMemoryMapPlugin/releases.
 Create a Plugins folder inside your LMU installation directory if it doesn't exist, and place the DLL there:
 Steam\steamapps\common\Le Mans Ultimate\
 └── Plugins\
