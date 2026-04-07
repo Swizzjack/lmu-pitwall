@@ -33,24 +33,49 @@ Grab the latest release from the [Releases page](https://github.com/Swizzjack/lm
 **Option B: Portable** — Download `lmu-pitwall.exe`, place it anywhere, and run it.
 
 Shared Memory Plugin (Required)
-LMU Pitwall reads telemetry data via the rF2 Shared Memory Plugin. Since LMU v1.3, this plugin is **no longer included** in a fresh LMU installation.
+LMU Pitwall reads telemetry data via the rF2 Shared Memory Map Plugin by TheIronWolf. This is a third-party plugin that is not included with Le Mans Ultimate and must be installed manually.
+Check if the plugin is already installed:
+Navigate to your LMU installation folder and look for:
+Le Mans Ultimate\Plugins\rFactor2SharedMemoryMapPlugin64.dll
+If the file exists, skip to step 3. If not, follow the full setup below.
 
-**Check if the plugin is already installed:**  
-Navigate to your LMU installation folder and look for a `Plugins` directory:
-C:\Program Files (x86)\Steam\steamapps\common\Le Mans Ultimate\Plugins\
+Step 1 — Install the plugin DLL
+Download rFactor2SharedMemoryMapPlugin64.dll from the latest release (or use the bundled Plugins.zip from the LMU Pitwall release page).
+Create a Plugins folder inside your LMU installation directory if it doesn't exist, and place the DLL there:
+Steam\steamapps\common\Le Mans Ultimate\
+└── Plugins\
+    └── rFactor2SharedMemoryMapPlugin64.dll
+    
+Step 2 — Enable the plugin in the configuration file
+Open (or create) the file CustomPluginVariables.JSON located at:
+Le Mans Ultimate\UserData\player\CustomPluginVariables.JSON
+If the file is empty or does not contain an entry for the plugin, replace its contents with:
+json{
+  "rFactor2SharedMemoryMapPlugin64.dll": {
+    " Enabled": 1,
+    "DebugISIInternals": 0,
+    "DebugOutputLevel": 0,
+    "DebugOutputSource": 0,
+    "DedicatedServerMapGlobally": 0,
+    "EnableDirectMemoryAccess": 0,
+    "EnableHWControlInput": 0,
+    "EnableRulesControlInput": 0,
+    "EnableWeatherControlInput": 0,
+    "UnsubscribedBuffersMask": 0
+  }
+}
 
-If the folder exists and contains `rFactor2SharedMemoryMapPlugin64.dll`, you're good to go.
+Note: The space before Enabled ( " Enabled") is intentional — the rF2 plugin engine requires it.
 
-**If the `Plugins` folder is missing:**  
-Download [Plugins.zip](https://github.com/Swizzjack/lmu-pitwall/releases/latest) from the latest release and extract it into your LMU installation folder so the structure looks like this:
-Le Mans Ultimate/
-├── Plugins/
-│   ├── rFactor2SharedMemoryMapPlugin64.dll
-│   ├── LMU_SharedMemoryMapPlugin64.dll
-│   └── CustomPluginVariables.json
-├── Bin/
-├── Core/
-└── ...
+If the file already contains entries for other plugins, add the rFactor2SharedMemoryMapPlugin64.dll block alongside them.
+
+Step 3 — Activate in-game and restart
+
+Launch Le Mans Ultimate
+Go to Settings → Gameplay and make sure Enable Plugins is turned ON
+Restart Le Mans Ultimate — plugins only take effect after a restart
+
+After restarting, the shared memory buffers will be available and LMU Pitwall can read telemetry data.
 
 ## Usage
 
