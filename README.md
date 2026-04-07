@@ -46,11 +46,16 @@ Steam\steamapps\common\Le Mans Ultimate\
 └── Plugins\
     └── rFactor2SharedMemoryMapPlugin64.dll
     
-Step 2 — Enable the plugin in the configuration file
-Open (or create) the file CustomPluginVariables.JSON located at:
+**Step 2 — Enable the plugin in the configuration file**
+
+Open (or create) the file `CustomPluginVariables.JSON` located at:
+```
 Le Mans Ultimate\UserData\player\CustomPluginVariables.JSON
+```
+
 If the file is empty or does not contain an entry for the plugin, replace its contents with:
-json{
+```json
+{
   "rFactor2SharedMemoryMapPlugin64.dll": {
     " Enabled": 1,
     "DebugISIInternals": 0,
@@ -64,10 +69,11 @@ json{
     "UnsubscribedBuffersMask": 0
   }
 }
+```
 
-Note: The space before Enabled ( " Enabled") is intentional — the rF2 plugin engine requires it.
+> **Note:** The space before `Enabled` (`" Enabled"`) is intentional — the rF2 plugin engine requires it.
 
-If the file already contains entries for other plugins, add the rFactor2SharedMemoryMapPlugin64.dll block alongside them.
+If the file already contains entries for other plugins, add the `rFactor2SharedMemoryMapPlugin64.dll` block alongside them.
 
 Step 3 — Activate in-game and restart
 
