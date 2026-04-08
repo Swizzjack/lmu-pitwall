@@ -250,12 +250,22 @@ pub enum ServerMessage {
     PostRaceSessionDetail {
         session_id: i64,
         drivers: Vec<PostRaceDriverSummary>,
+        /// Whether this session has any recorded events (incidents, penalties, …).
+        has_events: bool,
     },
 
     /// Response to `PostRaceDriverLaps` — every lap for one driver.
     PostRaceDriverLaps {
         driver_id: i64,
         laps: Vec<PostRaceLapData>,
+    },
+
+    /// Response to `PostRaceEvents` — all events for a session.
+    PostRaceEvents {
+        session_id: i64,
+        summary: PostRaceEventsSummary,
+        driver_summaries: Vec<PostRaceDriverEventSummary>,
+        events: Vec<PostRaceEvent>,
     },
 
     /// Response to `PostRaceCompare` — per-lap comparison across multiple drivers.
@@ -307,6 +317,11 @@ pub struct PostRaceDriverSummary {
     pub total_laps: Option<u32>,
     pub pitstops: Option<u32>,
     pub finish_status: Option<String>,
+    /// Gap to overall leader in seconds (None for leader or if data unavailable).
+    /// Always positive. For qualifying: best_lap_time delta. For race: elapsed_time delta.
+    pub gap_to_leader: Option<f64>,
+    /// Number of full laps behind the leader (race only, None if on same lap or not a race).
+    pub laps_behind: Option<i32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -330,6 +345,8 @@ pub struct PostRaceLapData {
     pub compound_rr: Option<String>,
     pub is_pit: bool,
     pub stint_number: u32,
+    /// Incidents that occurred during this lap (mapped by elapsed_time range).
+    pub incidents: Vec<PostRaceEvent>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -370,6 +387,45 @@ pub struct PostRaceStintData {
     pub compound: Option<String>,
 }
 
+/// A single incident, penalty, track-limit warning, or damage report.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PostRaceEvent {
+    pub id: i64,
+    pub event_type: String,
+    pub elapsed_time: f64,
+    /// Formatted as "M:SS".
+    pub elapsed_time_formatted: String,
+    pub driver_name: Option<String>,
+    pub target_name: Option<String>,
+    pub severity: Option<f64>,
+    pub message: Option<String>,
+}
+
+/// Session-wide event counts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PostRaceEventsSummary {
+    pub total_incidents: i64,
+    pub vehicle_contacts: i64,
+    pub object_contacts: i64,
+    pub penalties: i64,
+    pub track_limit_warnings: i64,
+    pub damage_reports: i64,
+}
+
+/// Per-driver aggregated event summary.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PostRaceDriverEventSummary {
+    pub driver_name: String,
+    pub incidents_total: i64,
+    pub incidents_vehicle: i64,
+    pub incidents_object: i64,
+    pub avg_severity: Option<f64>,
+    pub max_severity: Option<f64>,
+    pub penalties: i64,
+    pub track_limit_warnings: i64,
+    pub track_limit_points: Option<f64>,
+}
+
 // ---------------------------------------------------------------------------
 // Client → Bridge commands (JSON text frames)
 // ---------------------------------------------------------------------------
@@ -388,4 +444,6 @@ pub enum ClientCommand {
     PostRaceCompare { driver_ids: Vec<i64> },
     /// Per-stint aggregated summary for a driver.
     PostRaceStintSummary { driver_id: i64 },
+    /// Fetch all events (incidents, penalties, …) for a session.
+    PostRaceEvents { session_id: i64 },
 }

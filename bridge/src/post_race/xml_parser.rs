@@ -4,6 +4,8 @@
 
 use std::path::Path;
 
+use std::collections::HashSet;
+
 use anyhow::{Context, Result};
 use quick_xml::events::Event;
 use quick_xml::reader::Reader;
@@ -38,6 +40,8 @@ pub struct ParsedLap {
     /// Stint number (1-based). The lap containing the pit flag still belongs
     /// to the *current* stint; the next lap starts a new one.
     pub stint_number: u32,
+    /// Elapsed session time in seconds when this lap was completed (`et` attribute).
+    pub elapsed_time: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -58,6 +62,23 @@ pub struct ParsedDriver {
 }
 
 #[derive(Debug, Clone, Default)]
+pub struct ParsedEvent {
+    pub event_type: String,
+    pub elapsed_time: f64,
+    pub driver_name: Option<String>,
+    pub driver_id_xml: Option<i64>,
+    pub target_name: Option<String>,
+    pub severity: Option<f64>,
+    pub penalty_type: Option<String>,
+    pub reason: Option<String>,
+    pub served: Option<bool>,
+    pub warning_points: Option<f64>,
+    pub current_points: Option<f64>,
+    pub resolution: Option<String>,
+    pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, Default)]
 pub struct ParsedSession {
     /// E.g. "Practice1", "Qualify", "Race"
     pub session_type: String,
@@ -73,6 +94,7 @@ pub struct ParsedSession {
     pub fuel_mult: Option<f64>,
     pub tire_mult: Option<f64>,
     pub drivers: Vec<ParsedDriver>,
+    pub events: Vec<ParsedEvent>,
 }
 
 // ---------------------------------------------------------------------------
@@ -124,6 +146,146 @@ fn attr_u32(attrs: &quick_xml::events::attributes::Attributes<'_>, name: &[u8]) 
 }
 
 // ---------------------------------------------------------------------------
+// Stream event helpers
+// ---------------------------------------------------------------------------
+
+fn parse_incident_event(et: f64, text: &str) -> Option<ParsedEvent> {
+    // "Name(id) reported contact (severity) with another vehicle Name2(id2)"
+    let reported_pos = text.find(" reported ")?;
+    let before = &text[..reported_pos];
+    let lparen = before.rfind('(')?;
+    let rparen = before.rfind(')')?;
+    if lparen >= rparen {
+        return None;
+    }
+    let driver_name = before[..lparen].trim().to_string();
+    let driver_id_xml: i64 = before[lparen + 1..rparen].trim().parse().ok()?;
+
+    let severity = text.find("contact (").and_then(|pos| {
+        let after = &text[pos + "contact (".len()..];
+        let end = after.find(')')?;
+        after[..end].trim().parse::<f64>().ok()
+    });
+
+    let target_name = text.find(" with ").and_then(|pos| {
+        let after = &text[pos + " with ".len()..];
+        if after.starts_with("another vehicle ") {
+            let rest = &after["another vehicle ".len()..];
+            let lp = rest.rfind('(')?;
+            Some(rest[..lp].trim().to_string())
+        } else if after.starts_with("Post") {
+            Some("Post".to_string())
+        } else if after.starts_with("Immovable") {
+            Some("Immovable".to_string())
+        } else {
+            None
+        }
+    });
+
+    Some(ParsedEvent {
+        event_type: "incident".to_string(),
+        elapsed_time: et,
+        driver_name: Some(driver_name),
+        driver_id_xml: Some(driver_id_xml),
+        severity,
+        target_name,
+        message: Some(text.to_string()),
+        ..Default::default()
+    })
+}
+
+fn parse_driver_prefix(text: &str) -> (Option<String>, Option<i64>) {
+    if let Some(lp) = text.find('(') {
+        let name = text[..lp].trim().to_string();
+        let after = &text[lp + 1..];
+        if let Some(rp) = after.find(')') {
+            let id = after[..rp].trim().parse::<i64>().ok();
+            return (Some(name), id);
+        }
+        return (Some(name), None);
+    }
+    (None, None)
+}
+
+fn finalize_stream_event(
+    tag: &str,
+    et: f64,
+    driver_attr: &Option<String>,
+    id_attr: Option<i64>,
+    penalty_attr: &Option<String>,
+    reason_attr: &Option<String>,
+    warning_points: Option<f64>,
+    current_points: Option<f64>,
+    resolution_code: &Option<String>,
+    text: &str,
+) -> Option<ParsedEvent> {
+    match tag {
+        "Incident" => parse_incident_event(et, text),
+        "Penalty" => {
+            let served = if text.contains("served") {
+                Some(true)
+            } else if text.contains("received") {
+                Some(false)
+            } else {
+                None
+            };
+            Some(ParsedEvent {
+                event_type: "penalty".to_string(),
+                elapsed_time: et,
+                driver_name: driver_attr.clone(),
+                driver_id_xml: id_attr,
+                penalty_type: penalty_attr.clone(),
+                reason: reason_attr.clone(),
+                served,
+                message: if text.is_empty() { None } else { Some(text.to_string()) },
+                ..Default::default()
+            })
+        }
+        "TrackLimits" => {
+            // Only import Resolution="4" (Warning); skip "7" (No Further Action)
+            if resolution_code.as_deref() != Some("4") {
+                return None;
+            }
+            Some(ParsedEvent {
+                event_type: "track_limit".to_string(),
+                elapsed_time: et,
+                driver_name: driver_attr.clone(),
+                driver_id_xml: id_attr,
+                warning_points,
+                current_points,
+                resolution: if text.is_empty() { None } else { Some(text.to_string()) },
+                ..Default::default()
+            })
+        }
+        "Sector" => {
+            if !text.contains("suspension damage") {
+                return None;
+            }
+            let (driver_name, driver_id_xml) = parse_driver_prefix(text);
+            Some(ParsedEvent {
+                event_type: "damage".to_string(),
+                elapsed_time: et,
+                driver_name,
+                driver_id_xml,
+                message: Some(text.to_string()),
+                ..Default::default()
+            })
+        }
+        "ChatMessage" => {
+            let driver_name = text.find(':').map(|pos| text[..pos].trim().to_string());
+            Some(ParsedEvent {
+                event_type: "chat".to_string(),
+                elapsed_time: et,
+                driver_name,
+                message: Some(text.to_string()),
+                ..Default::default()
+            })
+        }
+        _ => None,
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Parser state machine
 // ---------------------------------------------------------------------------
 
@@ -163,6 +325,20 @@ pub fn parse_result_xml(path: &Path) -> Result<Vec<ParsedSession>> {
     // Current stint counter per driver (reset when a new Driver block starts)
     let mut current_stint: u32 = 1;
 
+    // Stream event state
+    let mut in_stream = false;
+    let mut stream_tag: Option<String> = None;
+    let mut stream_et: f64 = 0.0;
+    let mut stream_driver_attr: Option<String> = None;
+    let mut stream_id_attr: Option<i64> = None;
+    let mut stream_penalty_attr: Option<String> = None;
+    let mut stream_reason_attr: Option<String> = None;
+    let mut stream_warning_points: Option<f64> = None;
+    let mut stream_current_points: Option<f64> = None;
+    let mut stream_resolution_code: Option<String> = None;
+    let mut stream_text = String::new();
+    let mut seen_events: HashSet<(String, u64, String)> = HashSet::new();
+
     let mut buf = Vec::new();
 
     loop {
@@ -173,6 +349,10 @@ pub fn parse_result_xml(path: &Path) -> Result<Vec<ParsedSession>> {
                     .to_string();
 
                 if SESSION_TAGS.contains(&tag.as_str()) {
+                    // Reset stream state for new session (safety for malformed XML)
+                    in_stream = false;
+                    stream_tag = None;
+                    seen_events.clear();
                     // Start a new session, seeded with shared metadata
                     let s = ParsedSession {
                         session_type: tag.clone(),
@@ -217,10 +397,12 @@ pub fn parse_result_xml(path: &Path) -> Result<Vec<ParsedSession>> {
                     let is_pit = attr_str(&attrs, b"pit")
                         .map(|v| v.trim() == "1")
                         .unwrap_or(false);
+                    let elapsed_time = attr_f64(&attrs, b"et");
 
                     current_lap = Some(ParsedLap {
                         lap_num: num,
                         position: pos,
+                        lap_time: None, // set from text content below
                         s1,
                         s2,
                         s3,
@@ -237,9 +419,31 @@ pub fn parse_result_xml(path: &Path) -> Result<Vec<ParsedSession>> {
                         compound_rr,
                         is_pit,
                         stint_number: current_stint,
-                        ..Default::default()
+                        elapsed_time,
                     });
                     collecting_tag = Some("Lap".to_string());
+                } else if tag == "Stream" && current_session.is_some() {
+                    in_stream = true;
+                    seen_events.clear();
+                } else if in_stream
+                    && matches!(
+                        tag.as_str(),
+                        "Incident" | "Penalty" | "TrackLimits" | "Sector" | "ChatMessage"
+                    )
+                {
+                    let attrs = e.attributes();
+                    stream_et = attr_f64(&attrs, b"et").unwrap_or(0.0);
+                    stream_driver_attr = attr_str(&attrs, b"Driver");
+                    stream_id_attr =
+                        attr_str(&attrs, b"ID").and_then(|s| s.parse::<i64>().ok());
+                    stream_penalty_attr = attr_str(&attrs, b"Penalty");
+                    stream_reason_attr = attr_str(&attrs, b"Reason");
+                    stream_warning_points = attr_f64(&attrs, b"WarningPoints");
+                    stream_current_points = attr_f64(&attrs, b"CurrentPoints");
+                    stream_resolution_code = attr_str(&attrs, b"Resolution");
+                    stream_tag = Some(tag);
+                    stream_text.clear();
+                    collecting_tag = Some("__stream__".to_string());
                 } else {
                     collecting_tag = Some(tag);
                 }
@@ -271,6 +475,7 @@ pub fn parse_result_xml(path: &Path) -> Result<Vec<ParsedSession>> {
                     let is_pit = attr_str(&attrs, b"pit")
                         .map(|v| v.trim() == "1")
                         .unwrap_or(false);
+                    let elapsed_time = attr_f64(&attrs, b"et");
 
                     let lap = ParsedLap {
                         lap_num: num,
@@ -292,6 +497,7 @@ pub fn parse_result_xml(path: &Path) -> Result<Vec<ParsedSession>> {
                         compound_rr,
                         is_pit,
                         stint_number: current_stint,
+                        elapsed_time,
                     };
                     if is_pit {
                         current_stint += 1;
@@ -306,6 +512,12 @@ pub fn parse_result_xml(path: &Path) -> Result<Vec<ParsedSession>> {
                 if let Some(ref tag) = collecting_tag.clone() {
                     let text = e.unescape().unwrap_or_default().trim().to_string();
                     if text.is_empty() {
+                        continue;
+                    }
+
+                    // Stream event text accumulation
+                    if tag == "__stream__" {
+                        stream_text.push_str(&text);
                         continue;
                     }
 
@@ -440,8 +652,47 @@ pub fn parse_result_xml(path: &Path) -> Result<Vec<ParsedSession>> {
                     }
                     collecting_tag = None;
                 } else if SESSION_TAGS.contains(&tag.as_str()) {
+                    in_stream = false;
+                    stream_tag = None;
+                    seen_events.clear();
                     if let Some(session) = current_session.take() {
                         sessions.push(session);
+                    }
+                    collecting_tag = None;
+                } else if tag == "Stream" {
+                    in_stream = false;
+                    seen_events.clear();
+                } else if in_stream
+                    && stream_tag
+                        .as_deref()
+                        .map_or(false, |t| t == tag.as_str())
+                {
+                    if let Some(stag) = stream_tag.take() {
+                        let text = stream_text.trim().to_string();
+                        let maybe_ev = finalize_stream_event(
+                            &stag,
+                            stream_et,
+                            &stream_driver_attr,
+                            stream_id_attr,
+                            &stream_penalty_attr,
+                            &stream_reason_attr,
+                            stream_warning_points,
+                            stream_current_points,
+                            &stream_resolution_code,
+                            &text,
+                        );
+                        if let Some(ev) = maybe_ev {
+                            if let Some(s) = current_session.as_mut() {
+                                let key = (
+                                    ev.event_type.clone(),
+                                    stream_et.to_bits(),
+                                    ev.driver_name.clone().unwrap_or_default(),
+                                );
+                                if seen_events.insert(key) {
+                                    s.events.push(ev);
+                                }
+                            }
+                        }
                     }
                     collecting_tag = None;
                 } else {

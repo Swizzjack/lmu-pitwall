@@ -1,7 +1,7 @@
 {
   "name": "lmu-pitwall",
   "private": true,
-  "version": "1.0.84",
+  "version": "1.0.85",
   "type": "module",
   "scripts": {
     "dev": "vite",

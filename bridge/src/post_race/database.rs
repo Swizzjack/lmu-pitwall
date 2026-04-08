@@ -71,13 +71,36 @@ CREATE TABLE IF NOT EXISTS laps (
     compound_rl     TEXT,
     compound_rr     TEXT,
     is_pit          BOOLEAN NOT NULL DEFAULT 0,
-    stint_number    INTEGER
+    stint_number    INTEGER,
+    elapsed_time    REAL
 );
 
 CREATE INDEX IF NOT EXISTS idx_laps_driver_id    ON laps(driver_id);
 CREATE INDEX IF NOT EXISTS idx_laps_session_id   ON laps(session_id);
 CREATE INDEX IF NOT EXISTS idx_drivers_session_id ON drivers(session_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_file_hash ON sessions(file_hash);
+
+CREATE TABLE IF NOT EXISTS events (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_id      INTEGER NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    event_type      TEXT    NOT NULL,
+    elapsed_time    REAL    NOT NULL,
+    driver_name     TEXT,
+    driver_id_xml   INTEGER,
+    target_name     TEXT,
+    severity        REAL,
+    penalty_type    TEXT,
+    reason          TEXT,
+    served          BOOLEAN,
+    warning_points  REAL,
+    current_points  REAL,
+    resolution      TEXT,
+    message         TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_events_session_id   ON events(session_id);
+CREATE INDEX IF NOT EXISTS idx_events_session_type ON events(session_id, event_type);
+CREATE INDEX IF NOT EXISTS idx_events_driver_name  ON events(driver_name);
 ";
 
 // ---------------------------------------------------------------------------
@@ -98,6 +121,12 @@ impl PostRaceDb {
             .with_context(|| format!("Failed to open database at {}", db_path.display()))?;
         conn.execute_batch(SCHEMA)
             .context("Failed to apply database schema")?;
+        // Migration: add elapsed_time column to existing databases.
+        conn.execute(
+            "ALTER TABLE laps ADD COLUMN elapsed_time REAL",
+            [],
+        )
+        .ok(); // silently ignored if column already exists
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -185,11 +214,11 @@ mod tests {
         // Verify tables exist by querying sqlite_master
         let count: i64 = conn
             .query_row(
-                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('sessions','drivers','laps')",
+                "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name IN ('sessions','drivers','laps','events')",
                 [],
                 |r| r.get(0),
             )
             .unwrap();
-        assert_eq!(count, 3, "all three tables should be created");
+        assert_eq!(count, 4, "all four tables should be created");
     }
 }

@@ -208,6 +208,8 @@ fn insert_session(
         insert_driver(conn, session_id, driver)?;
     }
 
+    insert_events(conn, session_id, &session.events)?;
+
     Ok(())
 }
 
@@ -249,6 +251,41 @@ fn insert_driver(
     Ok(())
 }
 
+fn insert_events(
+    conn: &Connection,
+    session_id: i64,
+    events: &[super::xml_parser::ParsedEvent],
+) -> Result<()> {
+    for ev in events {
+        conn.execute(
+            "INSERT INTO events (
+                session_id, event_type, elapsed_time,
+                driver_name, driver_id_xml, target_name,
+                severity, penalty_type, reason, served,
+                warning_points, current_points, resolution, message
+             ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
+            rusqlite::params![
+                session_id,
+                ev.event_type,
+                ev.elapsed_time,
+                ev.driver_name,
+                ev.driver_id_xml,
+                ev.target_name,
+                ev.severity,
+                ev.penalty_type,
+                ev.reason,
+                ev.served,
+                ev.warning_points,
+                ev.current_points,
+                ev.resolution,
+                ev.message,
+            ],
+        )
+        .context("INSERT event")?;
+    }
+    Ok(())
+}
+
 fn insert_lap(
     conn: &Connection,
     driver_id: i64,
@@ -261,8 +298,8 @@ fn insert_lap(
             s1, s2, s3, top_speed, fuel_level, fuel_used,
             tw_fl, tw_fr, tw_rl, tw_rr,
             compound_fl, compound_fr, compound_rl, compound_rr,
-            is_pit, stint_number
-         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21)",
+            is_pit, stint_number, elapsed_time
+         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22)",
         rusqlite::params![
             driver_id,
             session_id,
@@ -285,6 +322,7 @@ fn insert_lap(
             lap.compound_rr,
             lap.is_pit,
             lap.stint_number,
+            lap.elapsed_time,
         ],
     )
     .context("INSERT lap")?;

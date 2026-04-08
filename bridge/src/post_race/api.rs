@@ -8,8 +8,9 @@ use anyhow::Result;
 use rusqlite::Connection;
 
 use crate::protocol::messages::{
-    ClientCommand, PostRaceComparedLap, PostRaceDriverLapEntry, PostRaceDriverSummary,
-    PostRaceLapData, PostRaceSessionMeta, PostRaceStintData, ServerMessage,
+    ClientCommand, PostRaceComparedLap, PostRaceDriverEventSummary, PostRaceDriverLapEntry,
+    PostRaceDriverSummary, PostRaceEvent, PostRaceEventsSummary, PostRaceLapData,
+    PostRaceSessionMeta, PostRaceStintData, ServerMessage,
 };
 
 use super::database::get_db;
@@ -29,6 +30,7 @@ pub fn handle_command(cmd: ClientCommand) -> ServerMessage {
         ClientCommand::PostRaceDriverLaps { driver_id } => post_race_driver_laps(driver_id),
         ClientCommand::PostRaceCompare { driver_ids } => post_race_compare(driver_ids),
         ClientCommand::PostRaceStintSummary { driver_id } => post_race_stint_summary(driver_id),
+        ClientCommand::PostRaceEvents { session_id } => post_race_events(session_id),
     }
 }
 
@@ -116,15 +118,28 @@ fn post_race_session_detail(session_id: i64) -> ServerMessage {
     };
     let conn = db.lock();
     match query_session_detail(&conn, session_id) {
-        Ok(drivers) => ServerMessage::PostRaceSessionDetail {
+        Ok((drivers, has_events)) => ServerMessage::PostRaceSessionDetail {
             session_id,
             drivers,
+            has_events,
         },
         Err(e) => db_error(format!("Session detail query failed: {e}")),
     }
 }
 
-fn query_session_detail(conn: &Connection, session_id: i64) -> Result<Vec<PostRaceDriverSummary>> {
+fn query_session_detail(
+    conn: &Connection,
+    session_id: i64,
+) -> Result<(Vec<PostRaceDriverSummary>, bool)> {
+    // Determine session type to pick the right gap strategy.
+    let session_type: String = conn.query_row(
+        "SELECT COALESCE(session_type, '') FROM sessions WHERE id = ?1",
+        rusqlite::params![session_id],
+        |row| row.get(0),
+    )?;
+    let is_race = session_type.contains("Race");
+
+    // Fetch driver base data.
     let mut stmt = conn.prepare(
         "SELECT id, name, car_type, car_class, car_number, team_name, is_player,
                 position, class_position, best_lap_time, total_laps, pitstops, finish_status
@@ -133,26 +148,147 @@ fn query_session_detail(conn: &Connection, session_id: i64) -> Result<Vec<PostRa
          ORDER BY position",
     )?;
 
-    let rows = stmt.query_map(rusqlite::params![session_id], |row| {
-        Ok(PostRaceDriverSummary {
-            id: row.get(0)?,
-            name: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-            car_type: row.get(2)?,
-            car_class: row.get(3)?,
-            car_number: row.get(4)?,
-            team_name: row.get(5)?,
-            is_player: row.get::<_, bool>(6)?,
-            position: row.get(7)?,
-            class_position: row.get(8)?,
-            best_lap_time: row.get(9)?,
-            total_laps: row.get(10)?,
-            pitstops: row.get(11)?,
-            finish_status: row.get(12)?,
-        })
-    })?;
+    let mut drivers: Vec<PostRaceDriverSummary> = stmt
+        .query_map(rusqlite::params![session_id], |row| {
+            Ok(PostRaceDriverSummary {
+                id: row.get(0)?,
+                name: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                car_type: row.get(2)?,
+                car_class: row.get(3)?,
+                car_number: row.get(4)?,
+                team_name: row.get(5)?,
+                is_player: row.get::<_, bool>(6)?,
+                position: row.get(7)?,
+                class_position: row.get(8)?,
+                best_lap_time: row.get(9)?,
+                total_laps: row.get(10)?,
+                pitstops: row.get(11)?,
+                finish_status: row.get(12)?,
+                gap_to_leader: None,
+                laps_behind: None,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
 
-    rows.collect::<rusqlite::Result<Vec<_>>>()
-        .map_err(Into::into)
+    if is_race {
+        compute_race_gaps(conn, session_id, &mut drivers)?;
+    } else {
+        compute_quali_gaps(&mut drivers);
+    }
+
+    let has_events: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM events WHERE session_id = ?1)",
+        rusqlite::params![session_id],
+        |row| row.get(0),
+    )?;
+
+    Ok((drivers, has_events))
+}
+
+/// Qualifying/Practice gap: difference in best_lap_time vs. leader.
+fn compute_quali_gaps(drivers: &mut Vec<PostRaceDriverSummary>) {
+    let leader_best = drivers
+        .iter()
+        .find(|d| d.position == Some(1))
+        .and_then(|d| d.best_lap_time);
+
+    let Some(leader_best) = leader_best else { return };
+
+    for driver in drivers.iter_mut() {
+        if driver.position == Some(1) {
+            continue;
+        }
+        // None best_lap_time → gap stays None (rendered as "–" / "NO TIME")
+        driver.gap_to_leader = driver.best_lap_time.map(|bt| bt - leader_best);
+    }
+}
+
+/// Race gap: elapsed_time at the driver's last valid lap compared to the leader
+/// at that same lap number. Drivers that are laps down get `laps_behind` set.
+fn compute_race_gaps(
+    conn: &Connection,
+    session_id: i64,
+    drivers: &mut Vec<PostRaceDriverSummary>,
+) -> Result<()> {
+    // Build driver_id → (last_valid_lap_num, elapsed_time) map.
+    // "Last valid lap" = highest lap_num where elapsed_time IS NOT NULL.
+    let mut et_stmt = conn.prepare(
+        "SELECT l.driver_id, l.lap_num, l.elapsed_time
+         FROM laps l
+         INNER JOIN (
+             SELECT driver_id, MAX(lap_num) AS max_lap
+             FROM laps
+             WHERE session_id = ?1 AND elapsed_time IS NOT NULL
+             GROUP BY driver_id
+         ) mx ON l.driver_id = mx.driver_id AND l.lap_num = mx.max_lap
+         WHERE l.session_id = ?1 AND l.elapsed_time IS NOT NULL",
+    )?;
+
+    let et_map: std::collections::HashMap<i64, (u32, f64)> = et_stmt
+        .query_map(rusqlite::params![session_id], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, u32>(1)?,
+                row.get::<_, f64>(2)?,
+            ))
+        })?
+        .filter_map(|r| r.ok())
+        .map(|(did, lap, et)| (did, (lap, et)))
+        .collect();
+
+    // Identify the leader.
+    let leader_id = match drivers.iter().find(|d| d.position == Some(1)) {
+        Some(l) => l.id,
+        None => return Ok(()),
+    };
+    let (leader_last_lap, leader_et_final) = match et_map.get(&leader_id) {
+        Some(&v) => v,
+        None => return Ok(()),
+    };
+
+    // Fetch the leader's elapsed_time at every lap number so we can compare
+    // lap-down drivers at their own last lap.
+    let mut leader_et_by_lap: std::collections::HashMap<u32, f64> = std::collections::HashMap::new();
+    {
+        let mut lap_stmt = conn.prepare(
+            "SELECT lap_num, elapsed_time FROM laps
+             WHERE driver_id = ?1 AND elapsed_time IS NOT NULL
+             ORDER BY lap_num",
+        )?;
+        for row in lap_stmt
+            .query_map(rusqlite::params![leader_id], |row| {
+                Ok((row.get::<_, u32>(0)?, row.get::<_, f64>(1)?))
+            })?
+            .flatten()
+        {
+            leader_et_by_lap.insert(row.0, row.1);
+        }
+    }
+
+    for driver in drivers.iter_mut() {
+        if driver.position == Some(1) {
+            continue;
+        }
+        let Some(&(driver_last_lap, driver_et)) = et_map.get(&driver.id) else {
+            continue;
+        };
+
+        let laps_diff = leader_last_lap as i64 - driver_last_lap as i64;
+        if laps_diff > 0 {
+            driver.laps_behind = Some(laps_diff as i32);
+            // Time gap at the driver's own last lap (for reference, optional)
+            if let Some(&leader_et_at_lap) = leader_et_by_lap.get(&driver_last_lap) {
+                let gap = driver_et - leader_et_at_lap;
+                driver.gap_to_leader = Some(gap.abs());
+            }
+        } else {
+            // Same lap count — straight elapsed_time difference.
+            let gap = driver_et - leader_et_final;
+            driver.gap_to_leader = Some(gap.abs());
+        }
+    }
+
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------
@@ -172,38 +308,93 @@ fn post_race_driver_laps(driver_id: i64) -> ServerMessage {
 }
 
 fn query_driver_laps(conn: &Connection, driver_id: i64) -> Result<Vec<PostRaceLapData>> {
+    // Fetch lap data including elapsed_time for incident mapping.
+    struct LapRow {
+        data: PostRaceLapData,
+        elapsed_time: Option<f64>,
+    }
+
     let mut stmt = conn.prepare(
         "SELECT lap_num, position, lap_time, s1, s2, s3, top_speed,
                 fuel_level, fuel_used,
                 tw_fl, tw_fr, tw_rl, tw_rr,
                 compound_fl, compound_fr, compound_rl, compound_rr,
-                is_pit, stint_number
+                is_pit, stint_number, elapsed_time
          FROM laps
          WHERE driver_id = ?1
          ORDER BY lap_num",
     )?;
 
+    let mut laps: Vec<LapRow> = stmt
+        .query_map(rusqlite::params![driver_id], |row| {
+            Ok(LapRow {
+                data: PostRaceLapData {
+                    lap_num: row.get::<_, u32>(0)?,
+                    position: row.get(1)?,
+                    lap_time: row.get(2)?,
+                    s1: row.get(3)?,
+                    s2: row.get(4)?,
+                    s3: row.get(5)?,
+                    top_speed: row.get(6)?,
+                    fuel_level: row.get(7)?,
+                    fuel_used: row.get(8)?,
+                    tw_fl: row.get(9)?,
+                    tw_fr: row.get(10)?,
+                    tw_rl: row.get(11)?,
+                    tw_rr: row.get(12)?,
+                    compound_fl: row.get(13)?,
+                    compound_fr: row.get(14)?,
+                    compound_rl: row.get(15)?,
+                    compound_rr: row.get(16)?,
+                    is_pit: row.get::<_, bool>(17)?,
+                    stint_number: row.get::<_, u32>(18)?,
+                    incidents: vec![],
+                },
+                elapsed_time: row.get(19)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    // Fetch incidents for this driver via session + driver name join.
+    let incidents = query_driver_incidents(conn, driver_id)?;
+
+    // Map each incident to a lap by elapsed_time range.
+    // Lap N covers (et[N-1], et[N]] where et[0] = 0.0.
+    for incident in incidents {
+        let et = incident.elapsed_time;
+        // Find the lap whose elapsed_time is the smallest value >= incident et.
+        let idx = laps.iter().position(|l| {
+            l.elapsed_time.map(|lap_et| lap_et >= et).unwrap_or(false)
+        });
+        if let Some(i) = idx {
+            laps[i].data.incidents.push(incident);
+        }
+    }
+
+    Ok(laps.into_iter().map(|l| l.data).collect())
+}
+
+fn query_driver_incidents(conn: &Connection, driver_id: i64) -> Result<Vec<PostRaceEvent>> {
+    let mut stmt = conn.prepare(
+        "SELECT e.id, e.event_type, e.elapsed_time, e.driver_name, e.target_name,
+                e.severity, e.message
+         FROM events e
+         INNER JOIN drivers d ON d.session_id = e.session_id AND d.name = e.driver_name
+         WHERE d.id = ?1
+         ORDER BY e.elapsed_time",
+    )?;
+
     let rows = stmt.query_map(rusqlite::params![driver_id], |row| {
-        Ok(PostRaceLapData {
-            lap_num: row.get::<_, u32>(0)?,
-            position: row.get(1)?,
-            lap_time: row.get(2)?,
-            s1: row.get(3)?,
-            s2: row.get(4)?,
-            s3: row.get(5)?,
-            top_speed: row.get(6)?,
-            fuel_level: row.get(7)?,
-            fuel_used: row.get(8)?,
-            tw_fl: row.get(9)?,
-            tw_fr: row.get(10)?,
-            tw_rl: row.get(11)?,
-            tw_rr: row.get(12)?,
-            compound_fl: row.get(13)?,
-            compound_fr: row.get(14)?,
-            compound_rl: row.get(15)?,
-            compound_rr: row.get(16)?,
-            is_pit: row.get::<_, bool>(17)?,
-            stint_number: row.get::<_, u32>(18)?,
+        let et: f64 = row.get(2)?;
+        Ok(PostRaceEvent {
+            id: row.get(0)?,
+            event_type: row.get(1)?,
+            elapsed_time: et,
+            elapsed_time_formatted: format_elapsed_time(et),
+            driver_name: row.get(3)?,
+            target_name: row.get(4)?,
+            severity: row.get(5)?,
+            message: row.get(6)?,
         })
     })?;
 
@@ -424,4 +615,129 @@ fn query_stint_summary(conn: &Connection, driver_id: i64) -> Result<Vec<PostRace
     }
 
     Ok(stints)
+}
+
+// ---------------------------------------------------------------------------
+// 6. post_race_events
+// ---------------------------------------------------------------------------
+
+fn post_race_events(session_id: i64) -> ServerMessage {
+    let db = match get_db() {
+        Ok(db) => db,
+        Err(e) => return db_error(format!("DB unavailable: {e}")),
+    };
+    let conn = db.lock();
+    match query_events(&conn, session_id) {
+        Ok((summary, driver_summaries, events)) => ServerMessage::PostRaceEvents {
+            session_id,
+            summary,
+            driver_summaries,
+            events,
+        },
+        Err(e) => db_error(format!("Events query failed: {e}")),
+    }
+}
+
+fn query_events(
+    conn: &Connection,
+    session_id: i64,
+) -> Result<(
+    PostRaceEventsSummary,
+    Vec<PostRaceDriverEventSummary>,
+    Vec<PostRaceEvent>,
+)> {
+    // Session-wide summary via SQL aggregation.
+    let summary = conn.query_row(
+        "SELECT
+             COUNT(CASE WHEN event_type = 'incident' THEN 1 END),
+             COUNT(CASE WHEN event_type = 'incident' AND target_name IS NOT NULL THEN 1 END),
+             COUNT(CASE WHEN event_type = 'incident' AND target_name IS NULL THEN 1 END),
+             COUNT(CASE WHEN event_type = 'penalty' THEN 1 END),
+             COUNT(CASE WHEN event_type = 'track_limit' THEN 1 END),
+             COUNT(CASE WHEN event_type = 'damage' THEN 1 END)
+         FROM events WHERE session_id = ?1",
+        rusqlite::params![session_id],
+        |row| {
+            Ok(PostRaceEventsSummary {
+                total_incidents: row.get(0)?,
+                vehicle_contacts: row.get(1)?,
+                object_contacts: row.get(2)?,
+                penalties: row.get(3)?,
+                track_limit_warnings: row.get(4)?,
+                damage_reports: row.get(5)?,
+            })
+        },
+    )?;
+
+    // Per-driver summaries via SQL GROUP BY.
+    let mut ds_stmt = conn.prepare(
+        "SELECT
+             driver_name,
+             COUNT(CASE WHEN event_type = 'incident' THEN 1 END),
+             COUNT(CASE WHEN event_type = 'incident' AND target_name IS NOT NULL THEN 1 END),
+             COUNT(CASE WHEN event_type = 'incident' AND target_name IS NULL THEN 1 END),
+             AVG(CASE WHEN event_type = 'incident' THEN severity END),
+             MAX(CASE WHEN event_type = 'incident' THEN severity END),
+             COUNT(CASE WHEN event_type = 'penalty' THEN 1 END),
+             COUNT(CASE WHEN event_type = 'track_limit' THEN 1 END),
+             SUM(CASE WHEN event_type = 'track_limit' THEN COALESCE(warning_points, 0) ELSE 0 END)
+         FROM events
+         WHERE session_id = ?1 AND driver_name IS NOT NULL
+         GROUP BY driver_name
+         ORDER BY COUNT(CASE WHEN event_type = 'incident' THEN 1 END) DESC",
+    )?;
+
+    let driver_summaries: Vec<PostRaceDriverEventSummary> = ds_stmt
+        .query_map(rusqlite::params![session_id], |row| {
+            Ok(PostRaceDriverEventSummary {
+                driver_name: row.get::<_, Option<String>>(0)?.unwrap_or_default(),
+                incidents_total: row.get(1)?,
+                incidents_vehicle: row.get(2)?,
+                incidents_object: row.get(3)?,
+                avg_severity: row.get(4)?,
+                max_severity: row.get(5)?,
+                penalties: row.get(6)?,
+                track_limit_warnings: row.get(7)?,
+                track_limit_points: row.get(8)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    // All events, sorted chronologically.
+    let mut ev_stmt = conn.prepare(
+        "SELECT id, event_type, elapsed_time, driver_name, target_name, severity, message
+         FROM events
+         WHERE session_id = ?1
+         ORDER BY elapsed_time",
+    )?;
+
+    let events: Vec<PostRaceEvent> = ev_stmt
+        .query_map(rusqlite::params![session_id], |row| {
+            let et: f64 = row.get(2)?;
+            Ok(PostRaceEvent {
+                id: row.get(0)?,
+                event_type: row.get(1)?,
+                elapsed_time: et,
+                elapsed_time_formatted: format_elapsed_time(et),
+                driver_name: row.get(3)?,
+                target_name: row.get(4)?,
+                severity: row.get(5)?,
+                message: row.get(6)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+
+    Ok((summary, driver_summaries, events))
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// Format elapsed time in seconds as "M:SS".
+fn format_elapsed_time(seconds: f64) -> String {
+    let total_secs = seconds as u64;
+    let minutes = total_secs / 60;
+    let secs = total_secs % 60;
+    format!("{}:{:02}", minutes, secs)
 }

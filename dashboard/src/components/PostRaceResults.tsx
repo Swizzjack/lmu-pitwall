@@ -37,6 +37,40 @@ interface PostRaceDriverSummary {
   total_laps: number | null
   pitstops: number | null
   finish_status: string | null
+  gap_to_leader: number | null
+  laps_behind: number | null
+}
+
+interface PostRaceEvent {
+  id: number
+  event_type: string
+  elapsed_time: number
+  elapsed_time_formatted: string
+  driver_name: string | null
+  target_name: string | null
+  severity: number | null
+  message: string | null
+}
+
+interface PostRaceEventsSummary {
+  total_incidents: number
+  vehicle_contacts: number
+  object_contacts: number
+  penalties: number
+  track_limit_warnings: number
+  damage_reports: number
+}
+
+interface PostRaceDriverEventSummary {
+  driver_name: string
+  incidents_total: number
+  incidents_vehicle: number
+  incidents_object: number
+  avg_severity: number | null
+  max_severity: number | null
+  penalties: number
+  track_limit_warnings: number
+  track_limit_points: number | null
 }
 
 interface PostRaceLapData {
@@ -59,6 +93,7 @@ interface PostRaceLapData {
   compound_rr: string | null
   is_pit: boolean
   stint_number: number
+  incidents: PostRaceEvent[]
 }
 
 interface PostRaceStintData {
@@ -97,10 +132,11 @@ interface PostRaceComparedLap {
 
 type PostRaceMsg =
   | { type: 'PostRaceSessions'; sessions: PostRaceSessionMeta[]; total_sessions: number; new_imported: number; files_found: number; import_errors: number }
-  | { type: 'PostRaceSessionDetail'; session_id: number; drivers: PostRaceDriverSummary[] }
+  | { type: 'PostRaceSessionDetail'; session_id: number; drivers: PostRaceDriverSummary[]; has_events: boolean }
   | { type: 'PostRaceDriverLaps'; driver_id: number; laps: PostRaceLapData[] }
   | { type: 'PostRaceStintSummary'; driver_id: number; stints: PostRaceStintData[] }
   | { type: 'PostRaceCompare'; reference_driver_id: number; laps: PostRaceComparedLap[] }
+  | { type: 'PostRaceEvents'; session_id: number; summary: PostRaceEventsSummary; driver_summaries: PostRaceDriverEventSummary[]; events: PostRaceEvent[] }
   | { type: 'PostRaceError'; message: string }
 
 // ── Pure helpers ───────────────────────────────────────────────────────────────
@@ -110,6 +146,12 @@ function fmtLap(secs: number | null | undefined): string {
   const m = Math.floor(secs / 60)
   const s = secs - m * 60
   return `${m}:${s.toFixed(3).padStart(6, '0')}`
+}
+
+function fmtGap(secs: number | null | undefined): string {
+  if (secs === null || secs === undefined) return '–'
+  if (!isFinite(secs)) return '–'
+  return `+${Math.abs(secs).toFixed(3)}s`
 }
 
 function fmtSec(v?: number | null): string {
@@ -205,6 +247,32 @@ function formatDateTime(raw: string | null): string {
   const hh = String(d.getHours()).padStart(2, '0')
   const min = String(d.getMinutes()).padStart(2, '0')
   return `${dd}.${mm}.${yyyy} ${hh}:${min}`
+}
+
+function severityColor(severity: number | null): string {
+  if (severity === null) return '#eab308'
+  if (severity > 500) return '#ef4444'
+  if (severity > 200) return '#f97316'
+  return '#eab308'
+}
+
+function eventTypeIcon(type: string): string {
+  switch (type) {
+    case 'incident':    return '⚠'
+    case 'penalty':     return '🏁'
+    case 'track_limit': return '⚡'
+    case 'damage':      return '🔧'
+    case 'chat':        return '💬'
+    default:            return '•'
+  }
+}
+
+function eventRowColor(type: string, severity: number | null): string {
+  if (type === 'incident')    return severityColor(severity)
+  if (type === 'penalty')     return '#ef4444'
+  if (type === 'track_limit') return '#eab308'
+  if (type === 'damage')      return '#f97316'
+  return '#555'
 }
 
 function normalizeSessionType(raw: string): string {
@@ -348,6 +416,7 @@ const ServerLapDetail = memo(function ServerLapDetail({
             <th style={{ ...thStyle, textAlign: 'center' }}>TIRE WEAR</th>
             <th style={{ ...thStyle, textAlign: 'center' }}>CPND</th>
             <th style={{ ...thStyle, textAlign: 'center' }}>STINT</th>
+            <th style={{ ...thStyle, textAlign: 'center' }}>EVT</th>
           </tr>
         </thead>
         <tbody>
@@ -400,6 +469,47 @@ const ServerLapDetail = memo(function ServerLapDetail({
                       }}>PIT</span>
                     )}
                   </div>
+                </td>
+                <td style={{ ...tdBase, textAlign: 'center', minWidth: 40 }}>
+                  {lap.incidents && lap.incidents.length > 0 && (
+                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 2, flexWrap: 'wrap' }}>
+                      {lap.incidents.map(ev => {
+                        const col = severityColor(ev.severity)
+                        const tipParts = [`T+${ev.elapsed_time_formatted}`]
+                        if (ev.target_name) tipParts.push(`vs. ${ev.target_name}`)
+                        if (ev.severity != null) tipParts.push(`sev. ${ev.severity.toFixed(1)}`)
+                        if (ev.message) tipParts.push(ev.message)
+                        return (
+                          <span
+                            key={ev.id}
+                            title={tipParts.join(' | ')}
+                            style={{
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              background: col + '22',
+                              border: `1px solid ${col}`,
+                              color: col,
+                              borderRadius: 3,
+                              padding: '0 3px',
+                              fontSize: 11,
+                              fontWeight: 700,
+                              lineHeight: '16px',
+                              cursor: 'default',
+                              whiteSpace: 'nowrap',
+                            }}
+                          >
+                            ⚠
+                            {ev.severity != null && (
+                              <span style={{ fontSize: 10, marginLeft: 2, opacity: 0.9 }}>
+                                {Math.round(ev.severity)}
+                              </span>
+                            )}
+                          </span>
+                        )
+                      })}
+                    </div>
+                  )}
                 </td>
               </tr>
             )
@@ -1233,6 +1343,428 @@ function StintSummaryView({
   )
 }
 
+// ── Events panel ─────────────────────────────────────────────────────────────
+
+type EventsData = {
+  session_id: number
+  summary: PostRaceEventsSummary
+  driver_summaries: PostRaceDriverEventSummary[]
+  events: PostRaceEvent[]
+}
+
+const EVENT_FILTER_OPTIONS: { key: string; label: string }[] = [
+  { key: 'incident',    label: 'Incidents' },
+  { key: 'penalty',     label: 'Penalties' },
+  { key: 'track_limit', label: 'Track Limits' },
+  { key: 'damage',      label: 'Damage' },
+  { key: 'chat',        label: 'Chat' },
+]
+
+function EventsPanel({
+  data,
+  loading,
+}: {
+  data: EventsData | null
+  loading: boolean
+}) {
+  const [evView, setEvView] = useState<'timeline' | 'drivers'>('timeline')
+  const [typeFilter, setTypeFilter] = useState<Set<string>>(
+    () => new Set(['incident', 'penalty', 'track_limit', 'damage'])
+  )
+  const [driverFilter, setDriverFilter] = useState<string | null>(null)
+  const [sortCol, setSortCol] = useState<keyof PostRaceDriverEventSummary>('incidents_total')
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
+
+  if (loading) {
+    return (
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 120, color: colors.textMuted, fontFamily: fonts.mono, fontSize: 13 }}>
+        Loading events…
+      </div>
+    )
+  }
+  if (!data) return null
+
+  const { summary, driver_summaries, events } = data
+
+  function toggleType(key: string) {
+    setTypeFilter(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) next.delete(key); else next.add(key)
+      return next
+    })
+  }
+
+  const filteredEvents = events.filter(e => {
+    if (!typeFilter.has(e.event_type)) return false
+    if (driverFilter && e.driver_name !== driverFilter) return false
+    return true
+  })
+
+  const sortedDrivers = [...driver_summaries].sort((a, b) => {
+    const av = (a[sortCol] as number) ?? 0
+    const bv = (b[sortCol] as number) ?? 0
+    return sortDir === 'asc' ? av - bv : bv - av
+  })
+
+  function onDriverSort(col: keyof PostRaceDriverEventSummary) {
+    if (col === sortCol) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
+    else { setSortCol(col); setSortDir('desc') }
+  }
+
+  function SortDTh({ col, label, title: ttl }: { col: keyof PostRaceDriverEventSummary; label: string; title?: string }) {
+    const active = sortCol === col
+    return (
+      <th
+        onClick={() => onDriverSort(col)}
+        title={ttl}
+        style={{
+          padding: '4px 8px',
+          borderBottom: `1px solid ${colors.border}`,
+          color: active ? colors.accent : colors.primary,
+          fontFamily: fonts.body,
+          fontSize: 11,
+          fontWeight: 700,
+          letterSpacing: 0.5,
+          textAlign: 'right',
+          whiteSpace: 'nowrap',
+          background: '#0e0e0e',
+          position: 'sticky',
+          top: 0,
+          cursor: 'pointer',
+          userSelect: 'none',
+        }}
+      >
+        {label}{active ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
+      </th>
+    )
+  }
+
+  // Summary card
+  const summaryCards: { label: string; value: number; color: string; title?: string }[] = [
+    { label: 'Incidents', value: summary.total_incidents, color: '#ef4444' },
+    { label: 'Vehicle Contact', value: summary.vehicle_contacts, color: '#f97316' },
+    { label: 'Object Contact', value: summary.object_contacts, color: '#eab308' },
+    { label: 'Penalties', value: summary.penalties, color: '#ef4444' },
+    { label: 'Track Limits', value: summary.track_limit_warnings, color: '#eab308', title: 'warnings' },
+    { label: 'Damage', value: summary.damage_reports, color: '#f97316' },
+  ]
+
+  const toggleBtnStyle = (active: boolean): React.CSSProperties => ({
+    background: active ? colors.primary + '22' : 'transparent',
+    border: `1px solid ${active ? colors.primary : colors.border}`,
+    color: active ? colors.primary : colors.textMuted,
+    fontFamily: fonts.body,
+    fontSize: 12,
+    fontWeight: active ? 700 : 400,
+    padding: '3px 12px',
+    borderRadius: 3,
+    cursor: 'pointer',
+    letterSpacing: 0.5,
+  })
+
+  const thTd: React.CSSProperties = {
+    padding: '4px 8px',
+    borderBottom: `1px solid ${colors.border}`,
+    color: colors.primary,
+    fontFamily: fonts.body,
+    fontSize: 11,
+    fontWeight: 700,
+    letterSpacing: 0.5,
+    textAlign: 'right',
+    whiteSpace: 'nowrap',
+    background: '#0e0e0e',
+    position: 'sticky' as const,
+    top: 0,
+  }
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0, overflow: 'hidden' }}>
+
+      {/* Summary cards */}
+      <div style={{
+        display: 'flex',
+        gap: 8,
+        padding: '10px 14px',
+        background: '#0a0a0a',
+        borderBottom: `1px solid ${colors.border}`,
+        flexWrap: 'wrap',
+        flexShrink: 0,
+      }}>
+        {summaryCards.map(card => (
+          <div key={card.label} style={{
+            background: card.color + '12',
+            border: `1px solid ${card.color}44`,
+            borderRadius: 5,
+            padding: '6px 12px',
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            gap: 1,
+            minWidth: 80,
+          }}>
+            <span style={{ fontSize: 22, fontWeight: 700, color: card.color, fontFamily: fonts.mono, lineHeight: 1 }}>
+              {card.value}
+            </span>
+            <span style={{ fontSize: 10, color: colors.textMuted, letterSpacing: 0.6, fontWeight: 700, whiteSpace: 'nowrap' }}>
+              {card.label.toUpperCase()}{card.title ? ` ${card.title.toUpperCase()}` : ''}
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {/* View toggle + filter chips */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        padding: '6px 14px',
+        background: '#0c0c0c',
+        borderBottom: `1px solid ${colors.border}`,
+        flexShrink: 0,
+        flexWrap: 'wrap',
+      }}>
+        <button style={toggleBtnStyle(evView === 'timeline')} onClick={() => setEvView('timeline')}>TIMELINE</button>
+        <button style={toggleBtnStyle(evView === 'drivers')} onClick={() => setEvView('drivers')}>DRIVERS</button>
+        <div style={{ width: 1, height: 18, background: colors.border }} />
+        {EVENT_FILTER_OPTIONS.map(opt => {
+          const active = typeFilter.has(opt.key)
+          const col = eventRowColor(opt.key, null)
+          return (
+            <button
+              key={opt.key}
+              onClick={() => toggleType(opt.key)}
+              style={{
+                background: active ? col + '22' : 'transparent',
+                border: `1px solid ${active ? col : colors.border}`,
+                color: active ? col : colors.textMuted,
+                fontFamily: fonts.body,
+                fontSize: 11,
+                fontWeight: active ? 700 : 400,
+                padding: '2px 9px',
+                borderRadius: 3,
+                cursor: 'pointer',
+              }}
+            >
+              {eventTypeIcon(opt.key)} {opt.label}
+            </button>
+          )
+        })}
+        {driverFilter && (
+          <>
+            <div style={{ width: 1, height: 18, background: colors.border }} />
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: 5,
+              background: colors.primary + '18',
+              border: `1px solid ${colors.primary}55`,
+              borderRadius: 3,
+              padding: '2px 7px',
+              fontSize: 11,
+              color: colors.primary,
+            }}>
+              <span>{driverFilter}</span>
+              <button
+                onClick={() => setDriverFilter(null)}
+                style={{ background: 'none', border: 'none', color: colors.textMuted, cursor: 'pointer', padding: '0 2px', fontSize: 12, lineHeight: 1 }}
+              >
+                ×
+              </button>
+            </div>
+          </>
+        )}
+        <div style={{ flex: 1 }} />
+        <span style={{ fontSize: 11, color: colors.textMuted }}>
+          {filteredEvents.length} event{filteredEvents.length !== 1 ? 's' : ''}
+        </span>
+      </div>
+
+      {/* Content */}
+      <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
+
+        {/* Timeline */}
+        {evView === 'timeline' && (
+          <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+            <thead>
+              <tr>
+                <th style={{ ...thTd, textAlign: 'left', width: 56 }}>TIME</th>
+                <th style={{ ...thTd, textAlign: 'center', width: 32 }}>TYPE</th>
+                <th style={{ ...thTd, textAlign: 'left' }}>DRIVER</th>
+                <th style={{ ...thTd, textAlign: 'left' }}>DETAILS</th>
+                <th style={{ ...thTd, textAlign: 'right', width: 70 }}>SEVERITY</th>
+              </tr>
+            </thead>
+            <tbody>
+              {filteredEvents.length === 0 && (
+                <tr>
+                  <td colSpan={5} style={{ padding: '24px 14px', textAlign: 'center', color: colors.textMuted, fontFamily: fonts.body, fontSize: 13 }}>
+                    No events match the current filters
+                  </td>
+                </tr>
+              )}
+              {filteredEvents.map((ev, idx) => {
+                const col = eventRowColor(ev.event_type, ev.severity)
+                const rowBg = idx % 2 === 0 ? '#111' : '#0e0e0e'
+                const description = ev.target_name
+                  ? `vs. ${ev.target_name}`
+                  : ev.message ?? '—'
+                return (
+                  <tr key={ev.id} style={{ background: rowBg, borderLeft: `2px solid ${col}44` }}>
+                    <td style={{
+                      padding: '3px 8px',
+                      borderBottom: `1px solid #1a1a1a`,
+                      fontFamily: fonts.mono,
+                      fontSize: 12,
+                      color: colors.textMuted,
+                      whiteSpace: 'nowrap',
+                    }}>
+                      {ev.elapsed_time_formatted}
+                    </td>
+                    <td style={{
+                      padding: '3px 6px',
+                      borderBottom: `1px solid #1a1a1a`,
+                      textAlign: 'center',
+                      fontSize: 14,
+                    }}>
+                      <span title={ev.event_type} style={{ cursor: 'default' }}>
+                        {eventTypeIcon(ev.event_type)}
+                      </span>
+                    </td>
+                    <td style={{
+                      padding: '3px 8px',
+                      borderBottom: `1px solid #1a1a1a`,
+                      fontFamily: fonts.body,
+                      fontSize: 13,
+                      color: colors.text,
+                      whiteSpace: 'nowrap',
+                      cursor: ev.driver_name ? 'pointer' : 'default',
+                    }}
+                      onClick={() => ev.driver_name && setDriverFilter(
+                        driverFilter === ev.driver_name ? null : ev.driver_name
+                      )}
+                      title={ev.driver_name ? `Filter to ${ev.driver_name}` : undefined}
+                    >
+                      {ev.driver_name ?? '—'}
+                    </td>
+                    <td style={{
+                      padding: '3px 8px',
+                      borderBottom: `1px solid #1a1a1a`,
+                      fontFamily: fonts.body,
+                      fontSize: 13,
+                      color: colors.textMuted,
+                      maxWidth: 320,
+                      overflow: 'hidden',
+                      textOverflow: 'ellipsis',
+                      whiteSpace: 'nowrap',
+                    }}>
+                      {description}
+                    </td>
+                    <td style={{
+                      padding: '3px 8px',
+                      borderBottom: `1px solid #1a1a1a`,
+                      textAlign: 'right',
+                      whiteSpace: 'nowrap',
+                    }}>
+                      {ev.event_type === 'incident' && ev.severity != null ? (
+                        <span style={{
+                          background: col + '22',
+                          border: `1px solid ${col}`,
+                          color: col,
+                          borderRadius: 3,
+                          padding: '1px 5px',
+                          fontSize: 11,
+                          fontWeight: 700,
+                          fontFamily: fonts.mono,
+                        }}>
+                          {ev.severity.toFixed(1)}
+                        </span>
+                      ) : ev.event_type === 'track_limit' && ev.message != null ? (
+                        <span style={{ fontSize: 12, color: colors.textMuted, fontFamily: fonts.mono }}>{ev.message}</span>
+                      ) : (
+                        <span style={{ color: colors.textMuted }}>—</span>
+                      )}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        )}
+
+        {/* Driver summaries */}
+        {evView === 'drivers' && (
+          <table style={{ borderCollapse: 'collapse', width: '100%' }}>
+            <thead>
+              <tr>
+                <th style={{ ...thTd, textAlign: 'left', cursor: 'default' }}>DRIVER</th>
+                <SortDTh col="incidents_total"   label="INC"  title="Total incidents" />
+                <SortDTh col="incidents_vehicle" label="VEH"  title="Vehicle contacts" />
+                <SortDTh col="incidents_object"  label="OBJ"  title="Object contacts" />
+                <SortDTh col="avg_severity"      label="AVG"  title="Average incident severity" />
+                <SortDTh col="max_severity"      label="MAX"  title="Maximum incident severity" />
+                <SortDTh col="penalties"         label="PEN"  title="Penalties" />
+                <SortDTh col="track_limit_warnings" label="TLW" title="Track limit warnings" />
+                <SortDTh col="track_limit_points"   label="TLP" title="Track limit points" />
+              </tr>
+            </thead>
+            <tbody>
+              {sortedDrivers.map((ds, idx) => {
+                const rowBg = idx % 2 === 0 ? '#111' : '#0e0e0e'
+                const isFiltered = driverFilter === ds.driver_name
+                const td: React.CSSProperties = {
+                  padding: '4px 8px',
+                  borderBottom: `1px solid #1a1a1a`,
+                  fontFamily: fonts.mono,
+                  fontSize: 13,
+                  color: colors.text,
+                  textAlign: 'right',
+                  whiteSpace: 'nowrap',
+                }
+                return (
+                  <tr
+                    key={ds.driver_name}
+                    style={{ background: isFiltered ? colors.primary + '14' : rowBg, cursor: 'pointer' }}
+                    onClick={() => setDriverFilter(isFiltered ? null : ds.driver_name)}
+                    onMouseEnter={e => (e.currentTarget.style.background = isFiltered ? colors.primary + '22' : colors.bgCard)}
+                    onMouseLeave={e => (e.currentTarget.style.background = isFiltered ? colors.primary + '14' : rowBg)}
+                    title="Click to filter timeline to this driver"
+                  >
+                    <td style={{ ...td, textAlign: 'left', fontFamily: fonts.body, fontSize: 13, color: isFiltered ? colors.primary : colors.text }}>
+                      {ds.driver_name}
+                    </td>
+                    <td style={{ ...td, color: ds.incidents_total > 0 ? '#ef4444' : colors.textMuted, fontWeight: ds.incidents_total > 0 ? 700 : 400 }}>
+                      {ds.incidents_total}
+                    </td>
+                    <td style={{ ...td, color: ds.incidents_vehicle > 0 ? '#f97316' : colors.textMuted }}>
+                      {ds.incidents_vehicle}
+                    </td>
+                    <td style={{ ...td, color: ds.incidents_object > 0 ? '#eab308' : colors.textMuted }}>
+                      {ds.incidents_object}
+                    </td>
+                    <td style={{ ...td, color: ds.avg_severity != null ? severityColor(ds.avg_severity) : colors.textMuted }}>
+                      {ds.avg_severity != null ? ds.avg_severity.toFixed(1) : '—'}
+                    </td>
+                    <td style={{ ...td, color: ds.max_severity != null ? severityColor(ds.max_severity) : colors.textMuted }}>
+                      {ds.max_severity != null ? ds.max_severity.toFixed(1) : '—'}
+                    </td>
+                    <td style={{ ...td, color: ds.penalties > 0 ? '#ef4444' : colors.textMuted }}>
+                      {ds.penalties}
+                    </td>
+                    <td style={{ ...td, color: ds.track_limit_warnings > 0 ? '#eab308' : colors.textMuted }}>
+                      {ds.track_limit_warnings}
+                    </td>
+                    <td style={{ ...td, color: (ds.track_limit_points ?? 0) > 0 ? '#eab308' : colors.textMuted }}>
+                      {ds.track_limit_points != null ? ds.track_limit_points.toFixed(2) : '—'}
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </div>
+  )
+}
+
 // ── Detail result row ─────────────────────────────────────────────────────────
 
 interface DetailRowProps {
@@ -1363,6 +1895,15 @@ const DetailRow = memo(function DetailRow({
       {/* Best lap */}
       <td style={{ ...cell, width: 105, textAlign: 'right', fontFamily: fonts.mono, color: bestColor, fontWeight: isOverallBest || isClassBest ? 700 : 400 }}>
         {fmtLap(driver.best_lap_time)}
+      </td>
+
+      {/* Gap to leader */}
+      <td style={{ ...cell, width: 90, textAlign: 'right', fontFamily: fonts.mono, color: driver.gap_to_leader != null || driver.laps_behind != null ? '#f59e0b' : colors.textMuted }}>
+        {driver.position === 1
+          ? 'LEADER'
+          : driver.laps_behind != null && driver.laps_behind > 0
+            ? `+${driver.laps_behind} Lap${driver.laps_behind > 1 ? 's' : ''}`
+            : fmtGap(driver.gap_to_leader)}
       </td>
 
       {/* Pits */}
@@ -1681,6 +2222,10 @@ export default function PostRaceResults({ onClose }: { onClose: () => void }) {
 
   // Session detail data
   const [drivers, setDrivers]               = useState<PostRaceDriverSummary[]>([])
+  const [sessionHasEvents, setSessionHasEvents] = useState(false)
+  const [eventsData, setEventsData]         = useState<EventsData | null>(null)
+  const [eventsLoading, setEventsLoading]   = useState(false)
+  const [detailTab, setDetailTab]           = useState<'results' | 'events'>('results')
   const [driverLaps, setDriverLaps]         = useState<Map<number, PostRaceLapData[]>>(new Map())
   const [driverStints, setDriverStints]     = useState<Map<number, PostRaceStintData[]>>(new Map())
 
@@ -1799,6 +2344,10 @@ export default function PostRaceResults({ onClose }: { onClose: () => void }) {
 
       case 'PostRaceSessionDetail':
         setDrivers(msg.drivers)
+        setSessionHasEvents(msg.has_events)
+        setEventsData(null)
+        setEventsLoading(false)
+        setDetailTab('results')
         setDriverLaps(new Map())
         setDriverStints(new Map())
         setSelectedDriver(null)
@@ -1820,6 +2369,11 @@ export default function PostRaceResults({ onClose }: { onClose: () => void }) {
 
       case 'PostRaceCompare':
         setCompareResult({ reference_driver_id: msg.reference_driver_id, laps: msg.laps })
+        break
+
+      case 'PostRaceEvents':
+        setEventsData({ session_id: msg.session_id, summary: msg.summary, driver_summaries: msg.driver_summaries, events: msg.events })
+        setEventsLoading(false)
         break
 
       case 'PostRaceError':
@@ -1859,6 +2413,14 @@ export default function PostRaceResults({ onClose }: { onClose: () => void }) {
   function backToDetail() {
     setSelectedDriver(null)
     goTo('detail')
+  }
+
+  function openEventsTab() {
+    setDetailTab('events')
+    if (!eventsData && !eventsLoading && selectedSession) {
+      setEventsLoading(true)
+      sendCmd({ command: 'post_race_events', session_id: selectedSession.id })
+    }
   }
 
   // ── Compare ───────────────────────────────────────────────────────────────
@@ -2392,43 +2954,102 @@ export default function PostRaceResults({ onClose }: { onClose: () => void }) {
 
       {/* Session detail */}
       {view === 'detail' && (
-        <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
-          <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'auto' }}>
-            <thead>
-              <tr>
-                {compareMode && <th style={{ ...thBase, cursor: 'default', width: 28 }} />}
-                <SortTh col="pos"  label="POS"      align="right" />
-                <th style={{ ...thBase, cursor: 'default', textAlign: 'center' }}>CL</th>
-                <th style={{ ...thBase, cursor: 'default', textAlign: 'center' }}>CAR</th>
-                <th style={{ ...thBase, cursor: 'default', textAlign: 'left' }}>DRIVER / TEAM</th>
-                <th style={{ ...thBase, cursor: 'default' }}>CLASS</th>
-                <SortTh col="laps" label="LAPS"     align="center" />
-                <SortTh col="best" label="BEST LAP" align="right" />
-                <th style={{ ...thBase, cursor: 'default', textAlign: 'center' }}>PITS</th>
-                <th style={{ ...thBase, cursor: 'default', textAlign: 'center' }}>ST</th>
-                <th style={{ ...thBase, cursor: 'default', width: 24 }} />
-              </tr>
-            </thead>
-            <tbody>
-              {displayedDrivers.map((d, idx) => {
-                const compareIdx = compareDriverIds.indexOf(d.id)
-                return (
-                  <DetailRow
-                    key={d.id}
-                    driver={d}
-                    overallBest={overallBest}
-                    classBest={classBests[d.car_class ?? ''] ?? -1}
-                    onSelect={() => openDriver(d)}
-                    rowIndex={idx}
-                    compareMode={compareMode}
-                    inCompare={compareIdx >= 0}
-                    compareColor={compareIdx >= 0 ? driverColor(compareIdx) : null}
-                    onToggleCompare={() => toggleCompareDriver(d)}
-                  />
-                )
-              })}
-            </tbody>
-          </table>
+        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+          {/* Tab bar */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 6,
+            padding: '5px 12px',
+            background: '#0a0a0a',
+            borderBottom: `1px solid ${colors.border}`,
+            flexShrink: 0,
+          }}>
+            <button
+              onClick={() => setDetailTab('results')}
+              style={{
+                background: detailTab === 'results' ? colors.primary + '22' : 'transparent',
+                border: `1px solid ${detailTab === 'results' ? colors.primary : colors.border}`,
+                color: detailTab === 'results' ? colors.primary : colors.textMuted,
+                fontFamily: fonts.body,
+                fontSize: 12,
+                fontWeight: detailTab === 'results' ? 700 : 400,
+                padding: '3px 14px',
+                borderRadius: 3,
+                cursor: 'pointer',
+                letterSpacing: 0.5,
+              }}
+            >
+              RESULTS
+            </button>
+            {sessionHasEvents && (
+              <button
+                onClick={openEventsTab}
+                style={{
+                  background: detailTab === 'events' ? '#ef4444' + '22' : 'transparent',
+                  border: `1px solid ${detailTab === 'events' ? '#ef4444' : colors.border}`,
+                  color: detailTab === 'events' ? '#ef4444' : colors.textMuted,
+                  fontFamily: fonts.body,
+                  fontSize: 12,
+                  fontWeight: detailTab === 'events' ? 700 : 400,
+                  padding: '3px 14px',
+                  borderRadius: 3,
+                  cursor: 'pointer',
+                  letterSpacing: 0.5,
+                }}
+              >
+                ⚠ EVENTS
+              </button>
+            )}
+          </div>
+
+          {/* Results tab */}
+          {detailTab === 'results' && (
+            <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
+              <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'auto' }}>
+                <thead>
+                  <tr>
+                    {compareMode && <th style={{ ...thBase, cursor: 'default', width: 28 }} />}
+                    <SortTh col="pos"  label="POS"      align="right" />
+                    <th style={{ ...thBase, cursor: 'default', textAlign: 'center' }}>CL</th>
+                    <th style={{ ...thBase, cursor: 'default', textAlign: 'center' }}>CAR</th>
+                    <th style={{ ...thBase, cursor: 'default', textAlign: 'left' }}>DRIVER / TEAM</th>
+                    <th style={{ ...thBase, cursor: 'default' }}>CLASS</th>
+                    <SortTh col="laps" label="LAPS"     align="center" />
+                    <SortTh col="best" label="BEST LAP" align="right" />
+                    <th style={{ ...thBase, cursor: 'default', textAlign: 'right' }}>GAP</th>
+                    <th style={{ ...thBase, cursor: 'default', textAlign: 'center' }}>PITS</th>
+                    <th style={{ ...thBase, cursor: 'default', textAlign: 'center' }}>ST</th>
+                    <th style={{ ...thBase, cursor: 'default', width: 24 }} />
+                  </tr>
+                </thead>
+                <tbody>
+                  {displayedDrivers.map((d, idx) => {
+                    const compareIdx = compareDriverIds.indexOf(d.id)
+                    return (
+                      <DetailRow
+                        key={d.id}
+                        driver={d}
+                        overallBest={overallBest}
+                        classBest={classBests[d.car_class ?? ''] ?? -1}
+                        onSelect={() => openDriver(d)}
+                        rowIndex={idx}
+                        compareMode={compareMode}
+                        inCompare={compareIdx >= 0}
+                        compareColor={compareIdx >= 0 ? driverColor(compareIdx) : null}
+                        onToggleCompare={() => toggleCompareDriver(d)}
+                      />
+                    )
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+
+          {/* Events tab */}
+          {detailTab === 'events' && (
+            <EventsPanel data={eventsData} loading={eventsLoading} />
+          )}
         </div>
       )}
 
