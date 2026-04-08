@@ -12,7 +12,8 @@ use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, info, warn};
 
-use crate::protocol::messages::ServerMessage;
+use crate::post_race::api::handle_command;
+use crate::protocol::messages::{ClientCommand, ServerMessage};
 
 /// Broadcast channel capacity — number of queued messages per slow client
 /// before older messages are dropped (lagged receiver).
@@ -43,10 +44,7 @@ pub struct WebSocketServer {
 }
 
 impl WebSocketServer {
-    pub fn new(
-        port: u16,
-        all_drivers_rx: watch::Receiver<Option<ServerMessage>>,
-    ) -> Self {
+    pub fn new(port: u16, all_drivers_rx: watch::Receiver<Option<ServerMessage>>) -> Self {
         let (tx, _) = broadcast::channel(BROADCAST_CAPACITY);
         let (count_tx, _) = watch::channel(0usize);
         WebSocketServer {
@@ -114,9 +112,8 @@ async fn handle_client(
     let is_json = Arc::new(AtomicBool::new(false));
     let is_json_cb = is_json.clone();
 
-    let ws = match tokio_tungstenite::accept_hdr_async(
-        stream,
-        move |req: &Request, resp: Response| {
+    let ws =
+        match tokio_tungstenite::accept_hdr_async(stream, move |req: &Request, resp: Response| {
             let json_requested = req
                 .uri()
                 .query()
@@ -126,16 +123,15 @@ async fn handle_client(
                 is_json_cb.store(true, Ordering::Relaxed);
             }
             Ok(resp)
-        },
-    )
-    .await
-    {
-        Ok(ws) => ws,
-        Err(e) => {
-            warn!("WebSocket handshake failed for {}: {}", peer, e);
-            return;
-        }
-    };
+        })
+        .await
+        {
+            Ok(ws) => ws,
+            Err(e) => {
+                warn!("WebSocket handshake failed for {}: {}", peer, e);
+                return;
+            }
+        };
 
     let fmt = if is_json.load(Ordering::Relaxed) {
         Format::Json
@@ -187,7 +183,7 @@ async fn handle_client(
                 }
             }
 
-            // Inbound: close frames and ignore other incoming frames.
+            // Inbound: dispatch text commands; close and drop everything else.
             frame = incoming.next() => {
                 match frame {
                     Some(Ok(Message::Close(_))) | None => {
@@ -198,8 +194,51 @@ async fn handle_client(
                         debug!("Client {} connection error: {}", peer, e);
                         break;
                     }
+                    Some(Ok(Message::Text(text))) => {
+                        match serde_json::from_str::<ClientCommand>(&text) {
+                            Ok(cmd) => {
+                                let response = tokio::task::spawn_blocking(move || {
+                                    handle_command(cmd)
+                                })
+                                .await;
+                                match response {
+                                    Ok(msg) => {
+                                        match serialize(&msg, fmt) {
+                                            Ok(ws_msg) => {
+                                                if let Err(e) = sink.send(ws_msg).await {
+                                                    debug!(
+                                                        "Send to {} failed: {}",
+                                                        peer, e
+                                                    );
+                                                    break;
+                                                }
+                                            }
+                                            Err(e) => {
+                                                warn!(
+                                                    "Serialization error for {}: {}",
+                                                    peer, e
+                                                );
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            "Post-race task panicked for {}: {}",
+                                            peer, e
+                                        );
+                                    }
+                                }
+                            }
+                            Err(e) => {
+                                warn!(
+                                    "Unparseable client command from {}: {}",
+                                    peer, e
+                                );
+                            }
+                        }
+                    }
                     Some(Ok(_)) => {
-                        // All other frames ignored.
+                        // Binary and other frames ignored.
                     }
                 }
             }

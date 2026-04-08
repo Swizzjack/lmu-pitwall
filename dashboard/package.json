@@ -1,7 +1,7 @@
 {
   "name": "lmu-pitwall",
   "private": true,
-  "version": "1.0.78",
+  "version": "1.0.84",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -14,6 +14,7 @@
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-grid-layout": "^2.2.2",
+    "recharts": "^3.8.1",
     "zustand": "^5.0.11"
   },
   "devDependencies": {

@@ -8,6 +8,7 @@ mod fuel;
 mod garage_api;
 mod http_server;
 mod lap_tracker;
+mod post_race;
 mod protocol;
 mod rest_api;
 mod shared_memory;

@@ -1,130 +1,175 @@
-import React, { useState, useRef, useMemo, memo } from 'react'
+import React, { useState, useRef, useMemo, memo, useEffect, useCallback } from 'react'
+import { decode } from '@msgpack/msgpack'
+import {
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, Legend,
+  ReferenceLine, ResponsiveContainer,
+} from 'recharts'
 import { colors, fonts } from '../styles/theme'
+import { useSettingsStore } from '../stores/settingsStore'
+import { getClassColor } from '../utils/classColors'
 
-// ── Types ─────────────────────────────────────────────────────────────────────
+// ── Server-side types (matching bridge/src/protocol/messages.rs) ──────────────
 
-interface LapRecord {
-  num: number
-  pos: number
-  time: number | null
-  et: number
-  s1?: number
-  s2?: number
-  s3?: number
-  topspeed: number
-  fuel: number       // 0–1 fraction remaining
-  fuelUsed: number
-  twfl: number       // tire wear remaining (1.0 = fresh)
-  twfr: number
-  twrl: number
-  twrr: number
-  fcompound: string  // e.g. "Medium"
-  rcompound: string
-  isPit: boolean
+interface PostRaceSessionMeta {
+  id: number
+  track_venue: string | null
+  track_course: string | null
+  track_event: string | null
+  date_time: string | null
+  session_type: string
+  game_version: string | null
+  race_laps: number | null
+  driver_count: number
+  total_laps: number
 }
 
-interface DriverResult {
+interface PostRaceDriverSummary {
+  id: number
   name: string
-  carClass: string
-  carNumber: string
-  teamName: string
-  vehName: string
-  position: number
-  classPosition: number
-  gridPos: number
-  bestLapTime: number
-  finishTime: number
-  totalLaps: number
-  pitstops: number
-  finishStatus: string
-  isPlayer: boolean
-  laps: LapRecord[]
-  bestTopSpeed: number
-  finalTires: [number, number, number, number]
-  lastFCompound: string
-  lastRCompound: string
+  car_type: string | null
+  car_class: string | null
+  car_number: number | null
+  team_name: string | null
+  is_player: boolean
+  position: number | null
+  class_position: number | null
+  best_lap_time: number | null
+  total_laps: number | null
+  pitstops: number | null
+  finish_status: string | null
 }
 
-interface RaceData {
-  trackVenue: string
-  trackEvent: string
-  trackLength: number
-  timeString: string
-  raceDurationMinutes: number
-  fuelMult: number
-  tireMult: number
-  sessionType: string   // 'Race', 'Qualifying', 'Practice', 'Warmup', etc.
-  drivers: DriverResult[]
+interface PostRaceLapData {
+  lap_num: number
+  position: number | null
+  lap_time: number | null
+  s1: number | null
+  s2: number | null
+  s3: number | null
+  top_speed: number | null
+  fuel_level: number | null
+  fuel_used: number | null
+  tw_fl: number | null
+  tw_fr: number | null
+  tw_rl: number | null
+  tw_rr: number | null
+  compound_fl: string | null
+  compound_fr: string | null
+  compound_rl: string | null
+  compound_rr: string | null
+  is_pit: boolean
+  stint_number: number
 }
 
-interface SessionEntry {
-  name: string       // filename
-  data: RaceData
+interface PostRaceStintData {
+  stint_number: number
+  lap_count: number
+  avg_pace: number | null
+  best_lap: number | null
+  worst_lap: number | null
+  fuel_start: number | null
+  fuel_end: number | null
+  fuel_consumed: number | null
+  tw_fl_start: number | null
+  tw_fr_start: number | null
+  tw_rl_start: number | null
+  tw_rr_start: number | null
+  tw_fl_end: number | null
+  tw_fr_end: number | null
+  tw_rl_end: number | null
+  tw_rr_end: number | null
+  compound: string | null
 }
+
+interface PostRaceDriverLapEntry {
+  driver_id: number
+  lap_time: number | null
+  delta: number | null
+  s1: number | null
+  s2: number | null
+  s3: number | null
+}
+
+interface PostRaceComparedLap {
+  lap_num: number
+  drivers: PostRaceDriverLapEntry[]
+}
+
+type PostRaceMsg =
+  | { type: 'PostRaceSessions'; sessions: PostRaceSessionMeta[]; total_sessions: number; new_imported: number; files_found: number; import_errors: number }
+  | { type: 'PostRaceSessionDetail'; session_id: number; drivers: PostRaceDriverSummary[] }
+  | { type: 'PostRaceDriverLaps'; driver_id: number; laps: PostRaceLapData[] }
+  | { type: 'PostRaceStintSummary'; driver_id: number; stints: PostRaceStintData[] }
+  | { type: 'PostRaceCompare'; reference_driver_id: number; laps: PostRaceComparedLap[] }
+  | { type: 'PostRaceError'; message: string }
 
 // ── Pure helpers ───────────────────────────────────────────────────────────────
 
-function fmtLap(secs: number | null): string {
-  if (secs === null || secs <= 0 || !isFinite(secs)) return '--:--.---'
+function fmtLap(secs: number | null | undefined): string {
+  if (secs === null || secs === undefined || secs <= 0 || !isFinite(secs)) return '--:--.---'
   const m = Math.floor(secs / 60)
   const s = secs - m * 60
   return `${m}:${s.toFixed(3).padStart(6, '0')}`
 }
 
-function fmtSec(v?: number): string {
+function fmtSec(v?: number | null): string {
   if (!v || v <= 0) return '–'
   return v.toFixed(3)
 }
 
 function wearColor(w: number): string {
-  if (w >= 0.85) return '#22c55e'
-  if (w >= 0.65) return '#facc15'
-  if (w >= 0.40) return '#f97316'
+  if (w >= 0.90) return '#22c55e'
+  if (w >= 0.80) return '#facc15'
+  if (w >= 0.70) return '#f97316'
   return '#ef4444'
 }
 
-function parseCompound(raw: string | null): string {
+function stdDev(values: number[]): number | null {
+  if (values.length < 2) return null
+  const mean = values.reduce((a, b) => a + b, 0) / values.length
+  const variance = values.reduce((a, v) => a + (v - mean) ** 2, 0) / values.length
+  return Math.sqrt(variance)
+}
+
+function parseCompound(raw: string | null | undefined): string {
   if (!raw) return '?'
   const idx = raw.indexOf(',')
   return idx >= 0 ? raw.slice(idx + 1).trim() : raw
 }
 
-const KNOWN_CLASS_COLORS: Record<string, string> = {
-  Hypercar:   '#e11d48',
-  LMP2:       '#2563eb',
-  LMP2_ELMS:  '#2563eb',
-  LMGT3:      '#16a34a',
-  GT3:        '#16a34a',
-  LMP3:       '#7c3aed',
-}
-const CLASS_PALETTE = ['#0891b2', '#d97706', '#059669', '#9333ea', '#dc2626']
+// Compare driver palette — distinct, vibrant
+const DRIVER_COMPARE_COLORS = [
+  '#38bdf8', // sky
+  '#fb7185', // rose
+  '#a3e635', // lime
+  '#fb923c', // orange
+  '#c084fc', // purple
+  '#34d399', // emerald
+  '#fcd34d', // amber
+  '#67e8f9', // cyan
+]
 
-function clsColor(cls: string, all: string[]): string {
-  return KNOWN_CLASS_COLORS[cls]
-    ?? CLASS_PALETTE[all.indexOf(cls) % CLASS_PALETTE.length]
-    ?? '#737373'
+function driverColor(idx: number): string {
+  return DRIVER_COMPARE_COLORS[idx % DRIVER_COMPARE_COLORS.length]
 }
 
-function finishLabel(status: string): { text: string; color: string } {
-  if (status === 'Finished Normally') return { text: 'FIN',  color: colors.success }
-  if (status === 'DNF')               return { text: 'DNF',  color: colors.danger }
-  if (status === 'DQ')                return { text: 'DQ',   color: colors.danger }
-  if (status === 'None')              return { text: '–',    color: colors.textMuted }
+function fmtDelta(d: number | null | undefined): string {
+  if (d === null || d === undefined || !isFinite(d)) return '–'
+  const sign = d > 0 ? '+' : ''
+  return `${sign}${d.toFixed(3)}`
+}
+
+function deltaColor(d: number | null | undefined): string {
+  if (d === null || d === undefined || !isFinite(d) || Math.abs(d) < 0.001) return colors.textMuted
+  return d < 0 ? '#22c55e' : '#ef4444'
+}
+
+function finishLabel(status: string | null): { text: string; color: string } {
+  if (!status || status === 'None')        return { text: '–',    color: colors.textMuted }
+  if (status === 'Finished Normally')      return { text: 'FIN',  color: colors.success }
+  if (status === 'DNF')                    return { text: 'DNF',  color: colors.danger }
+  if (status === 'DQ')                     return { text: 'DQ',   color: colors.danger }
   return { text: status.slice(0, 4).toUpperCase(), color: colors.textMuted }
-}
-
-// ── Session type helpers ───────────────────────────────────────────────────────
-
-function inferSessionType(xmlValue: string, fileName: string): string {
-  const check = (src: string) => {
-    const v = src.toLowerCase()
-    if (v.includes('race'))    return 'Race'
-    if (v.includes('qual'))    return 'Qualifying'
-    if (v.includes('prac'))    return 'Practice'
-    if (v.includes('warm'))    return 'Warmup'
-    return null
-  }
-  return check(xmlValue) ?? check(fileName) ?? (xmlValue.trim() || 'Session')
 }
 
 type SessionKind = 'Race' | 'Qualifying' | 'Practice' | 'Warmup' | string
@@ -140,164 +185,55 @@ function sessionColors(kind: SessionKind) {
   return SESSION_COLORS[kind] ?? { bg: '#555', text: '#fff' }
 }
 
-// ── XML Parser ─────────────────────────────────────────────────────────────────
-
-function fv(s: string | null | undefined): number {
-  const v = parseFloat(s ?? '')
-  return isNaN(v) ? 0 : v
-}
-
-function iv(s: string | null | undefined): number {
-  const v = parseInt(s ?? '', 10)
-  return isNaN(v) ? 0 : v
-}
-
-function getTextContent(parent: Element, tag: string): string {
-  return parent.querySelector(tag)?.textContent?.trim() ?? ''
-}
-
-function parseRaceXML(xmlText: string, fileName = ''): RaceData {
-  const doc = new DOMParser().parseFromString(xmlText, 'application/xml')
-
-  if (doc.querySelector('parsererror')) {
-    throw new Error('XML parse error — is this a valid rFactor results file?')
+function parseDateTime(raw: string | null): Date | null {
+  if (!raw) return null
+  if (/^\d+$/.test(raw)) {
+    return new Date(parseInt(raw, 10) * 1000)
   }
-
-  const root = doc.querySelector('RaceResults')
-  if (!root) throw new Error('No <RaceResults> element found')
-
-  const drivers: DriverResult[] = []
-
-  doc.querySelectorAll('Driver').forEach((el) => {
-    const name = getTextContent(el, 'Name')
-    if (!name) return
-
-    const laps: LapRecord[] = []
-    el.querySelectorAll('Lap').forEach((lapEl) => {
-      const raw = lapEl.textContent?.trim() ?? ''
-      const time: number | null =
-        raw === '--.----' || raw === '' ? null : fv(raw)
-
-      laps.push({
-        num:       iv(lapEl.getAttribute('num')),
-        pos:       iv(lapEl.getAttribute('p')),
-        time,
-        et:        fv(lapEl.getAttribute('et')),
-        s1:        lapEl.hasAttribute('s1') ? fv(lapEl.getAttribute('s1')) : undefined,
-        s2:        lapEl.hasAttribute('s2') ? fv(lapEl.getAttribute('s2')) : undefined,
-        s3:        lapEl.hasAttribute('s3') ? fv(lapEl.getAttribute('s3')) : undefined,
-        topspeed:  fv(lapEl.getAttribute('topspeed')),
-        fuel:      fv(lapEl.getAttribute('fuel')),
-        fuelUsed:  fv(lapEl.getAttribute('fuelUsed')),
-        twfl:      fv(lapEl.getAttribute('twfl')),
-        twfr:      fv(lapEl.getAttribute('twfr')),
-        twrl:      fv(lapEl.getAttribute('twrl')),
-        twrr:      fv(lapEl.getAttribute('twrr')),
-        fcompound: parseCompound(lapEl.getAttribute('fcompound')),
-        rcompound: parseCompound(lapEl.getAttribute('rcompound')),
-        isPit:     lapEl.getAttribute('pit') === '1',
-      })
-    })
-
-    const bestTopSpeed = laps.reduce((m, l) => Math.max(m, l.topspeed), 0)
-    const last = laps[laps.length - 1]
-    const finalTires: [number, number, number, number] = last
-      ? [last.twfl, last.twfr, last.twrl, last.twrr]
-      : [1, 1, 1, 1]
-
-    drivers.push({
-      name,
-      carClass:      getTextContent(el, 'CarClass'),
-      carNumber:     getTextContent(el, 'CarNumber'),
-      teamName:      getTextContent(el, 'TeamName'),
-      vehName:       getTextContent(el, 'VehName'),
-      position:      iv(getTextContent(el, 'Position')),
-      classPosition: iv(getTextContent(el, 'ClassPosition')),
-      gridPos:       iv(getTextContent(el, 'GridPos')),
-      bestLapTime:   fv(getTextContent(el, 'BestLapTime')),
-      finishTime:    fv(getTextContent(el, 'FinishTime')),
-      totalLaps:     iv(getTextContent(el, 'Laps')),
-      pitstops:      iv(getTextContent(el, 'Pitstops')),
-      finishStatus:  getTextContent(el, 'FinishStatus'),
-      isPlayer:      getTextContent(el, 'isPlayer') === '1',
-      laps,
-      bestTopSpeed,
-      finalTires,
-      lastFCompound: last?.fcompound ?? '?',
-      lastRCompound: last?.rcompound ?? '?',
-    })
-  })
-
-  // Sort by overall finish position; unclassified to bottom
-  drivers.sort((a, b) => {
-    if (a.position <= 0 && b.position <= 0) return 0
-    if (a.position <= 0) return 1
-    if (b.position <= 0) return -1
-    return a.position - b.position
-  })
-
-  // Detect session type: prefer explicit tags, then presence of <Race>/<Qualifying>/etc. child element
-  const rawSession = getTextContent(root, 'RaceSession') || getTextContent(root, 'SessionType') || ''
-  const sessionTagType = root.querySelector('Race') ? 'Race'
-    : root.querySelector('Qualifying') ? 'Qualifying'
-    : root.querySelector('Practice') ? 'Practice'
-    : root.querySelector('Warmup') ? 'Warmup'
-    : ''
-
-  return {
-    trackVenue:            getTextContent(root, 'TrackVenue'),
-    trackEvent:            getTextContent(root, 'TrackEvent'),
-    trackLength:           fv(getTextContent(root, 'TrackLength')),
-    timeString:            getTextContent(root, 'TimeString'),
-    raceDurationMinutes:   iv(getTextContent(root, 'RaceTime')),
-    fuelMult:              fv(getTextContent(root, 'FuelMult')),
-    tireMult:              fv(getTextContent(root, 'TireMult')),
-    sessionType:           sessionTagType || inferSessionType(rawSession, fileName),
-    drivers,
-  }
+  const d = new Date(raw)
+  if (!isNaN(d.getTime())) return d
+  return null
 }
 
-// ── Tire wear mini grid ────────────────────────────────────────────────────────
-
-const TIRE_LABELS = ['FL', 'FR', 'RL', 'RR'] as const
-
-function TireGrid({ tires }: { tires: [number, number, number, number] }) {
-  const tip = tires.map((w, i) => `${TIRE_LABELS[i]}: ${Math.round(w * 100)}%`).join(' | ')
-  return (
-    <div style={{ display: 'inline-grid', gridTemplateColumns: '1fr 1fr', gap: 2 }} title={tip}>
-      {tires.map((w, i) => (
-        <div
-          key={i}
-          style={{ width: 14, height: 7, background: wearColor(w), borderRadius: 1 }}
-        />
-      ))}
-    </div>
-  )
+function formatDateTime(raw: string | null): string {
+  if (!raw) return '—'
+  const d = parseDateTime(raw)
+  if (!d) return raw
+  const dd = String(d.getDate()).padStart(2, '0')
+  const mm = String(d.getMonth() + 1).padStart(2, '0')
+  const yyyy = d.getFullYear()
+  const hh = String(d.getHours()).padStart(2, '0')
+  const min = String(d.getMinutes()).padStart(2, '0')
+  return `${dd}.${mm}.${yyyy} ${hh}:${min}`
 }
 
-// ── Tire wear numeric 2×2 ─────────────────────────────────────────────────────
+function normalizeSessionType(raw: string): string {
+  const v = raw.toLowerCase()
+  if (v.includes('race'))  return 'Race'
+  if (v.includes('qual'))  return 'Qualifying'
+  if (v.includes('prac'))  return 'Practice'
+  if (v.includes('warm'))  return 'Warmup'
+  return raw || 'Session'
+}
+
+// ── Visual components ──────────────────────────────────────────────────────────
 
 function TireWearNumeric({ tires }: { tires: [number, number, number, number] }) {
   const [fl, fr, rl, rr] = tires
   const cell = (label: string, w: number): React.ReactNode => (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
-      <span style={{ fontSize: 9, color: '#555', fontFamily: 'monospace', lineHeight: 1 }}>{label}</span>
-      <span style={{ fontSize: 11, fontWeight: 700, color: wearColor(w), fontFamily: 'monospace', lineHeight: 1 }}>
+      <span style={{ fontSize: 11, color: '#555', fontFamily: 'monospace', lineHeight: 1 }}>{label}</span>
+      <span style={{ fontSize: 13, fontWeight: 700, color: wearColor(w), fontFamily: 'monospace', lineHeight: 1 }}>
         {Math.round(w * 100)}%
       </span>
     </div>
   )
   return (
     <div style={{ display: 'inline-grid', gridTemplateColumns: '1fr 1fr', gap: '2px 8px' }}>
-      {cell('FL', fl)}
-      {cell('FR', fr)}
-      {cell('RL', rl)}
-      {cell('RR', rr)}
+      {cell('FL', fl)}{cell('FR', fr)}{cell('RL', rl)}{cell('RR', rr)}
     </div>
   )
 }
-
-// ── Compound badge ─────────────────────────────────────────────────────────────
 
 const COMPOUND_COLORS: Record<string, string> = {
   Soft:       '#ef4444',
@@ -319,7 +255,7 @@ function CompoundBadge({ name }: { name: string }) {
       color: bg,
       borderRadius: 3,
       padding: '1px 5px',
-      fontSize: 10,
+      fontSize: 11,
       fontWeight: 700,
       letterSpacing: 0.3,
       whiteSpace: 'nowrap',
@@ -328,8 +264,6 @@ function CompoundBadge({ name }: { name: string }) {
     </span>
   )
 }
-
-// ── Session type badge ─────────────────────────────────────────────────────────
 
 function SessionTypeBadge({ type }: { type: string }) {
   const { bg, text } = sessionColors(type)
@@ -350,18 +284,30 @@ function SessionTypeBadge({ type }: { type: string }) {
   )
 }
 
-// ── Expanded lap detail ────────────────────────────────────────────────────────
+function InfoChip({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+      <span style={{ fontSize: 11, color: colors.textMuted, letterSpacing: 0.8, fontWeight: 700 }}>{label}</span>
+      <span style={{ fontSize: 14, color: colors.text }}>{value || '—'}</span>
+    </div>
+  )
+}
 
-const LapDetail = memo(function LapDetail({ laps, overallBest }: {
-  laps: LapRecord[]
+// ── Lap detail (server data) ──────────────────────────────────────────────────
+
+const ServerLapDetail = memo(function ServerLapDetail({
+  laps,
+  overallBest,
+}: {
+  laps: PostRaceLapData[]
   overallBest: number
 }) {
   const thStyle: React.CSSProperties = {
-    padding: '3px 6px',
+    padding: '4px 8px',
     borderBottom: `1px solid ${colors.border}`,
     color: colors.primary,
     fontFamily: fonts.body,
-    fontSize: 11,
+    fontSize: 14,
     fontWeight: 700,
     letterSpacing: 0.5,
     textAlign: 'right',
@@ -374,7 +320,7 @@ const LapDetail = memo(function LapDetail({ laps, overallBest }: {
     padding: '2px 6px',
     borderBottom: `1px solid #1a1a1a`,
     fontFamily: fonts.mono,
-    fontSize: 12,
+    fontSize: 13,
     color: colors.text,
     textAlign: 'right',
     whiteSpace: 'nowrap',
@@ -382,13 +328,13 @@ const LapDetail = memo(function LapDetail({ laps, overallBest }: {
   }
 
   const personalBest = laps.reduce((best, l) => {
-    if (l.time === null || l.time <= 0 || l.isPit) return best
-    return best === null || l.time < best ? l.time : best
+    if (l.lap_time === null || l.lap_time <= 0 || l.is_pit) return best
+    return best === null || l.lap_time < best ? l.lap_time : best
   }, null as number | null)
 
   return (
     <div style={{ overflowX: 'auto', background: '#0e0e0e', borderTop: `1px solid ${colors.border}` }}>
-      <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 800 }}>
+      <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 780 }}>
         <thead>
           <tr>
             <th style={{ ...thStyle, textAlign: 'right' }}>LAP</th>
@@ -401,38 +347,59 @@ const LapDetail = memo(function LapDetail({ laps, overallBest }: {
             <th style={{ ...thStyle, textAlign: 'right' }}>FUEL%</th>
             <th style={{ ...thStyle, textAlign: 'center' }}>TIRE WEAR</th>
             <th style={{ ...thStyle, textAlign: 'center' }}>CPND</th>
-            <th style={{ ...thStyle, textAlign: 'center' }}>PIT</th>
+            <th style={{ ...thStyle, textAlign: 'center' }}>STINT</th>
           </tr>
         </thead>
         <tbody>
           {laps.map((lap, idx) => {
-            const isOBest = overallBest > 0 && lap.time !== null && lap.time === overallBest
-            const isPBest = personalBest !== null && lap.time !== null && lap.time === personalBest && !isOBest
+            const isOBest = overallBest > 0 && lap.lap_time !== null && lap.lap_time === overallBest
+            const isPBest = personalBest !== null && lap.lap_time !== null && lap.lap_time === personalBest && !isOBest
             const timeColor = isOBest ? '#c026d3' : isPBest ? '#22c55e' : colors.text
-            const rowBg = lap.isPit
-              ? '#1b1a10'
-              : idx % 2 === 0 ? '#111' : '#0e0e0e'
+            const rowBg = lap.is_pit ? '#1b1a10' : idx % 2 === 0 ? '#111' : '#0e0e0e'
+
+            const twfl = lap.tw_fl ?? 1
+            const twfr = lap.tw_fr ?? 1
+            const twrl = lap.tw_rl ?? 1
+            const twrr = lap.tw_rr ?? 1
+            const fcompound = parseCompound(lap.compound_fl)
+            const fuelPct = lap.fuel_level !== null ? Math.round(lap.fuel_level * 100) : null
 
             return (
-              <tr key={lap.num} style={{ background: rowBg }}>
-                <td style={{ ...tdBase, color: colors.textMuted }}>{lap.num}</td>
-                <td style={{ ...tdBase, color: colors.textMuted }}>{lap.pos}</td>
+              <tr key={lap.lap_num} style={{ background: rowBg }}>
+                <td style={{ ...tdBase, color: colors.textMuted }}>{lap.lap_num}</td>
+                <td style={{ ...tdBase, color: colors.textMuted }}>{lap.position ?? '–'}</td>
                 <td style={{ ...tdBase, color: timeColor, fontWeight: isOBest || isPBest ? 700 : 400 }}>
-                  {fmtLap(lap.time)}
+                  {fmtLap(lap.lap_time)}
                 </td>
                 <td style={{ ...tdBase, color: colors.textMuted }}>{fmtSec(lap.s1)}</td>
                 <td style={{ ...tdBase, color: colors.textMuted }}>{fmtSec(lap.s2)}</td>
                 <td style={{ ...tdBase, color: colors.textMuted }}>{fmtSec(lap.s3)}</td>
-                <td style={{ ...tdBase }}>{lap.topspeed > 0 ? lap.topspeed.toFixed(1) : '–'}</td>
-                <td style={{ ...tdBase }}>{Math.round(lap.fuel * 100)}%</td>
+                <td style={{ ...tdBase }}>
+                  {lap.top_speed !== null && lap.top_speed > 0 ? lap.top_speed.toFixed(1) : '–'}
+                </td>
+                <td style={{ ...tdBase }}>{fuelPct !== null ? `${fuelPct}%` : '–'}</td>
                 <td style={{ ...tdBase, textAlign: 'center' }}>
-                  <TireWearNumeric tires={[lap.twfl, lap.twfr, lap.twrl, lap.twrr]} />
+                  <TireWearNumeric tires={[twfl, twfr, twrl, twrr]} />
                 </td>
                 <td style={{ ...tdBase, textAlign: 'center' }}>
-                  <CompoundBadge name={lap.fcompound} />
+                  {fcompound !== '?' ? <CompoundBadge name={fcompound} /> : '–'}
                 </td>
-                <td style={{ ...tdBase, textAlign: 'center', color: colors.accent }}>
-                  {lap.isPit ? 'PIT' : ''}
+                <td style={{ ...tdBase, textAlign: 'center' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 4 }}>
+                    <span style={{ color: colors.textMuted }}>{lap.stint_number}</span>
+                    {lap.is_pit && (
+                      <span style={{
+                        background: colors.accent + '22',
+                        border: `1px solid ${colors.accent}`,
+                        color: colors.accent,
+                        borderRadius: 3,
+                        padding: '0px 4px',
+                        fontSize: 11,
+                        fontWeight: 700,
+                        letterSpacing: 0.3,
+                      }}>PIT</span>
+                    )}
+                  </div>
                 </td>
               </tr>
             )
@@ -443,503 +410,1599 @@ const LapDetail = memo(function LapDetail({ laps, overallBest }: {
   )
 })
 
-// ── Main results table row ─────────────────────────────────────────────────────
+// ── Compare: Lap-by-lap table ─────────────────────────────────────────────────
 
-interface ResultRowProps {
-  driver: DriverResult
-  allClasses: string[]
-  gap: string
-  overallBest: number
-  classBest: number
-  expanded: boolean
-  onToggle: () => void
-  rowIndex: number
+function CompareTableLaps({
+  compareDriverIds,
+  compareDriverInfo,
+  compareResult,
+}: {
+  compareDriverIds: number[]
+  compareDriverInfo: Map<number, PostRaceDriverSummary>
+  compareResult: { reference_driver_id: number; laps: PostRaceComparedLap[] }
+}) {
+  const { reference_driver_id: refId, laps } = compareResult
+
+  // Compute cumulative deltas per non-reference driver
+  const cumulativeDeltas = useMemo(() => {
+    const m = new Map<number, number[]>()
+    for (const did of compareDriverIds) {
+      if (did === refId) continue
+      let cum = 0
+      const arr: number[] = []
+      for (const lap of laps) {
+        const entry = lap.drivers.find(d => d.driver_id === did)
+        if (entry?.delta != null) cum += entry.delta
+        arr.push(cum)
+      }
+      m.set(did, arr)
+    }
+    return m
+  }, [compareDriverIds, laps, refId])
+
+  const thStyle: React.CSSProperties = {
+    padding: '3px 6px',
+    borderBottom: `1px solid ${colors.border}`,
+    color: colors.primary,
+    fontFamily: fonts.body,
+    fontSize: 12,
+    fontWeight: 700,
+    letterSpacing: 0.5,
+    textAlign: 'right',
+    whiteSpace: 'nowrap',
+    background: '#0e0e0e',
+    position: 'sticky',
+    top: 0,
+    zIndex: 1,
+  }
+  const tdBase: React.CSSProperties = {
+    padding: '2px 6px',
+    borderBottom: `1px solid #1a1a1a`,
+    fontFamily: fonts.mono,
+    fontSize: 13,
+    color: colors.text,
+    textAlign: 'right',
+    whiteSpace: 'nowrap',
+    verticalAlign: 'middle',
+  }
+
+  // Per-driver personal bests
+  const personalBests = useMemo(() => {
+    const m = new Map<number, number>()
+    for (const did of compareDriverIds) {
+      let best = Infinity
+      for (const lap of laps) {
+        const e = lap.drivers.find(d => d.driver_id === did)
+        if (e?.lap_time != null && e.lap_time > 0) best = Math.min(best, e.lap_time)
+      }
+      if (best < Infinity) m.set(did, best)
+    }
+    return m
+  }, [compareDriverIds, laps])
+
+  return (
+    <div style={{ overflowX: 'auto', background: '#0e0e0e', flex: 1 }}>
+      <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 600 }}>
+        <thead>
+          <tr>
+            <th style={{ ...thStyle, textAlign: 'left' }}>LAP</th>
+            {compareDriverIds.map((did, i) => {
+              const name = compareDriverInfo.get(did)?.name ?? `#${did}`
+              const isRef = did === refId
+              const color = driverColor(i)
+              const colSpan = isRef ? 4 : 6
+              return (
+                <th
+                  key={did}
+                  colSpan={colSpan}
+                  style={{
+                    ...thStyle,
+                    textAlign: 'center',
+                    color,
+                    borderLeft: `2px solid ${color}33`,
+                    fontSize: 13,
+                  }}
+                >
+                  {name}{isRef ? ' [REF]' : ''}
+                </th>
+              )
+            })}
+          </tr>
+          <tr>
+            <th style={{ ...thStyle, textAlign: 'left' }} />
+            {compareDriverIds.map((did, i) => {
+              const isRef = did === refId
+              const color = driverColor(i)
+              const sub: React.ReactNode[] = [
+                <th key="t" style={{ ...thStyle, borderLeft: `2px solid ${color}33`, color }}>TIME</th>,
+                <th key="s1" style={{ ...thStyle }}>S1</th>,
+                <th key="s2" style={{ ...thStyle }}>S2</th>,
+                <th key="s3" style={{ ...thStyle }}>S3</th>,
+              ]
+              if (!isRef) {
+                sub.push(<th key="d" style={{ ...thStyle }}>Δ</th>)
+                sub.push(<th key="cd" style={{ ...thStyle }}>ΣΔ</th>)
+              }
+              return sub
+            })}
+          </tr>
+        </thead>
+        <tbody>
+          {laps.map((lap, lapIdx) => {
+            const rowBg = lapIdx % 2 === 0 ? '#111' : '#0e0e0e'
+            return (
+              <tr key={lap.lap_num} style={{ background: rowBg }}>
+                <td style={{ ...tdBase, color: colors.textMuted, textAlign: 'left', width: 36 }}>{lap.lap_num}</td>
+                {compareDriverIds.map((did, i) => {
+                  const isRef = did === refId
+                  const color = driverColor(i)
+                  const entry = lap.drivers.find(d => d.driver_id === did)
+                  const t = entry?.lap_time ?? null
+                  const best = personalBests.get(did)
+                  const isBest = best != null && t != null && t === best
+                  const cumArr = cumulativeDeltas.get(did)
+                  const cumDelta = cumArr ? cumArr[lapIdx] : null
+
+                  return (
+                    <React.Fragment key={did}>
+                      <td style={{ ...tdBase, borderLeft: `2px solid ${color}33`, color: isBest ? '#22c55e' : colors.text, fontWeight: isBest ? 700 : 400 }}>
+                        {fmtLap(t)}
+                      </td>
+                      <td style={{ ...tdBase, color: colors.textMuted }}>{fmtSec(entry?.s1)}</td>
+                      <td style={{ ...tdBase, color: colors.textMuted }}>{fmtSec(entry?.s2)}</td>
+                      <td style={{ ...tdBase, color: colors.textMuted }}>{fmtSec(entry?.s3)}</td>
+                      {!isRef && (
+                        <>
+                          <td style={{ ...tdBase, color: deltaColor(entry?.delta), fontWeight: 600 }}>
+                            {fmtDelta(entry?.delta)}
+                          </td>
+                          <td style={{ ...tdBase, color: deltaColor(cumDelta) }}>
+                            {fmtDelta(cumDelta)}
+                          </td>
+                        </>
+                      )}
+                    </React.Fragment>
+                  )
+                })}
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+    </div>
+  )
 }
 
-const ResultRow = memo(function ResultRow({
-  driver, allClasses, gap, overallBest, classBest, expanded, onToggle, rowIndex,
-}: ResultRowProps) {
-  const cc = clsColor(driver.carClass, allClasses)
-  const fl = finishLabel(driver.finishStatus)
-  const isLeader = gap === 'LEAD'
-  const rowBg = expanded
-    ? colors.bgCard + 'cc'
-    : rowIndex % 2 === 0 ? colors.bg : '#141414'
+// ── Compare: Stint side-by-side ───────────────────────────────────────────────
+
+function CompareTableStints({
+  compareDriverIds,
+  compareDriverInfo,
+  compareStints,
+}: {
+  compareDriverIds: number[]
+  compareDriverInfo: Map<number, PostRaceDriverSummary>
+  compareStints: Map<number, PostRaceStintData[]>
+}) {
+  // Collect all stint numbers present across any driver
+  const allStintNums = useMemo(() => {
+    const s = new Set<number>()
+    for (const did of compareDriverIds) {
+      for (const st of (compareStints.get(did) ?? [])) {
+        s.add(st.stint_number)
+      }
+    }
+    return [...s].sort((a, b) => a - b)
+  }, [compareDriverIds, compareStints])
+
+  if (allStintNums.length === 0) {
+    return (
+      <div style={{ padding: 32, textAlign: 'center', color: colors.textMuted, fontFamily: fonts.body }}>
+        Stint-Daten werden geladen…
+      </div>
+    )
+  }
+
+  const statRow = (label: string, values: React.ReactNode[]) => (
+    <tr key={label}>
+      <td style={{ padding: '3px 8px', color: colors.textMuted, fontSize: 12, fontWeight: 700, letterSpacing: 0.5, whiteSpace: 'nowrap' }}>
+        {label}
+      </td>
+      {values.map((v, i) => (
+        <td key={i} style={{ padding: '3px 8px', fontFamily: fonts.mono, fontSize: 13, color: colors.text, textAlign: 'right', borderLeft: `1px solid ${colors.border}` }}>
+          {v}
+        </td>
+      ))}
+    </tr>
+  )
+
+  const tireGrid = (fl: number | null | undefined, fr: number | null | undefined, rl: number | null | undefined, rr: number | null | undefined) => {
+    if (fl == null) return '—'
+    return (
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '1px 8px', fontSize: 12 }}>
+        {([['FL', fl], ['FR', fr], ['RL', rl], ['RR', rr]] as [string, number | null | undefined][]).map(([lb, v]) => (
+          <span key={lb} style={{ color: v != null ? wearColor(v) : colors.textMuted }}>
+            {lb}: {v != null ? `${Math.round(v * 100)}%` : '—'}
+          </span>
+        ))}
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 12 }}>
+      {allStintNums.map(sn => {
+        const stints = compareDriverIds.map(did => compareStints.get(did)?.find(s => s.stint_number === sn) ?? null)
+
+        return (
+          <div key={sn} style={{ background: colors.bgCard, border: `1px solid ${colors.border}`, borderRadius: 6, overflow: 'hidden' }}>
+            <table style={{ borderCollapse: 'collapse', width: '100%', tableLayout: 'fixed' }}>
+              <colgroup>
+                <col style={{ width: 100 }} />
+                {compareDriverIds.map(did => <col key={did} />)}
+              </colgroup>
+              <thead>
+                <tr style={{ background: '#0e0e0e', borderBottom: `1px solid ${colors.border}` }}>
+                  <th style={{ padding: '6px 12px', fontFamily: fonts.heading, fontSize: 14, color: colors.primary, fontWeight: 700, letterSpacing: 1, textAlign: 'left' }}>
+                    STINT {sn}
+                  </th>
+                  {compareDriverIds.map((did, i) => {
+                    const color = driverColor(i)
+                    const st = stints[i]
+                    const compound = parseCompound(st?.compound)
+                    return (
+                      <th key={did} style={{ padding: '6px 12px', borderLeft: `2px solid ${color}`, textAlign: 'left' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          <span style={{ fontSize: 13, color, fontWeight: 700 }}>
+                            {compareDriverInfo.get(did)?.name ?? `#${did}`}
+                          </span>
+                          {compound !== '?' && st && <CompoundBadge name={compound} />}
+                          {st && <span style={{ fontSize: 12, color: colors.textMuted }}>{st.lap_count} laps</span>}
+                        </div>
+                      </th>
+                    )
+                  })}
+                </tr>
+              </thead>
+              <tbody>
+                {statRow('AVG PACE', stints.map((st, i) => {
+                  const ref = stints[0]
+                  if (!st) return '—'
+                  const delta = i > 0 && ref?.avg_pace != null && st.avg_pace != null
+                    ? st.avg_pace - ref.avg_pace : null
+                  return (
+                    <div>
+                      <div>{fmtLap(st.avg_pace)}</div>
+                      {delta != null && <div style={{ fontSize: 11, color: deltaColor(delta) }}>{fmtDelta(delta)}</div>}
+                    </div>
+                  )
+                }))}
+                {statRow('BEST LAP', stints.map((st, i) => {
+                  if (!st) return '—'
+                  const delta = i > 0 && stints[0]?.best_lap != null && st.best_lap != null
+                    ? st.best_lap - stints[0]!.best_lap! : null
+                  return (
+                    <div>
+                      <div style={{ color: '#22c55e' }}>{fmtLap(st.best_lap)}</div>
+                      {delta != null && <div style={{ fontSize: 11, color: deltaColor(delta) }}>{fmtDelta(delta)}</div>}
+                    </div>
+                  )
+                }))}
+                {statRow('FUEL', stints.map(st => {
+                  if (!st || st.fuel_start == null) return '—'
+                  const consumed = st.fuel_consumed != null ? `−${Math.round(st.fuel_consumed * 100)}%` : ''
+                  return (
+                    <div>
+                      <span>{Math.round((st.fuel_start) * 100)}%</span>
+                      <span style={{ color: colors.textMuted }}> → </span>
+                      <span>{Math.round((st.fuel_end ?? 0) * 100)}%</span>
+                      {consumed && <div style={{ fontSize: 11, color: colors.textMuted }}>{consumed}</div>}
+                    </div>
+                  )
+                }))}
+                {statRow('TIRES BEG', stints.map(st =>
+                  tireGrid(st?.tw_fl_start, st?.tw_fr_start, st?.tw_rl_start, st?.tw_rr_start)
+                ))}
+                {statRow('TIRES END', stints.map(st =>
+                  tireGrid(st?.tw_fl_end, st?.tw_fr_end, st?.tw_rl_end, st?.tw_rr_end)
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// ── Compare: Charts ───────────────────────────────────────────────────────────
+
+function CompareCharts({
+  compareDriverIds,
+  compareDriverInfo,
+  compareResult,
+  compareLaps,
+}: {
+  compareDriverIds: number[]
+  compareDriverInfo: Map<number, PostRaceDriverSummary>
+  compareResult: { reference_driver_id: number; laps: PostRaceComparedLap[] }
+  compareLaps: Map<number, PostRaceLapData[]>
+}) {
+  const { reference_driver_id: refId, laps } = compareResult
+
+  // ── Lap time chart data ──
+  const lapTimeData = useMemo(() => laps.map(lap => {
+    const row: Record<string, number | null> = { lap: lap.lap_num }
+    for (const did of compareDriverIds) {
+      const e = lap.drivers.find(d => d.driver_id === did)
+      const t = e?.lap_time
+      row[`t_${did}`] = t != null && t > 0 ? t : null
+    }
+    return row
+  }), [laps, compareDriverIds])
+
+  // ── Cumulative delta data ──
+  const cumDeltaData = useMemo(() => {
+    const cumMap = new Map<number, number>()
+    compareDriverIds.forEach(id => cumMap.set(id, 0))
+    return laps.map(lap => {
+      const row: Record<string, number | null> = { lap: lap.lap_num }
+      row[`cd_${refId}`] = 0
+      for (const did of compareDriverIds) {
+        if (did === refId) continue
+        const e = lap.drivers.find(d => d.driver_id === did)
+        const prev = cumMap.get(did) ?? 0
+        const next = e?.delta != null ? prev + e.delta : prev
+        cumMap.set(did, next)
+        row[`cd_${did}`] = next
+      }
+      return row
+    })
+  }, [laps, compareDriverIds, refId])
+
+  // ── Tire wear data per driver ──
+  const tireWearData = useMemo(() => {
+    const data: { lap: number; [k: string]: number | null }[] = []
+    const allLapNums = new Set<number>()
+    for (const did of compareDriverIds) {
+      for (const l of (compareLaps.get(did) ?? [])) allLapNums.add(l.lap_num)
+    }
+    for (const lapNum of [...allLapNums].sort((a, b) => a - b)) {
+      const row: { lap: number; [k: string]: number | null } = { lap: lapNum }
+      for (const did of compareDriverIds) {
+        const l = compareLaps.get(did)?.find(x => x.lap_num === lapNum)
+        row[`fl_${did}`] = l?.tw_fl != null ? Math.round(l.tw_fl * 100) : null
+        row[`fr_${did}`] = l?.tw_fr != null ? Math.round(l.tw_fr * 100) : null
+        row[`rl_${did}`] = l?.tw_rl != null ? Math.round(l.tw_rl * 100) : null
+        row[`rr_${did}`] = l?.tw_rr != null ? Math.round(l.tw_rr * 100) : null
+      }
+      data.push(row)
+    }
+    return data
+  }, [compareDriverIds, compareLaps])
+
+  // Collect pit laps per driver
+  const pitLaps = useMemo(() => {
+    const p: { lap: number; did: number }[] = []
+    for (const did of compareDriverIds) {
+      for (const l of (compareLaps.get(did) ?? [])) {
+        if (l.is_pit) p.push({ lap: l.lap_num, did })
+      }
+    }
+    return p
+  }, [compareDriverIds, compareLaps])
+
+  const chartStyle: React.CSSProperties = {
+    background: '#0e0e0e',
+    border: `1px solid ${colors.border}`,
+    borderRadius: 6,
+    padding: '12px 8px 4px',
+    marginBottom: 12,
+  }
+  const chartTitle = (t: string) => (
+    <div style={{ fontSize: 12, color: colors.textMuted, letterSpacing: 0.8, fontWeight: 700, marginBottom: 6, paddingLeft: 8 }}>
+      {t}
+    </div>
+  )
+  const gridProps = { stroke: '#222', strokeDasharray: '3 3' } as const
+  const axisProps = { stroke: '#444', tick: { fill: '#666', fontSize: 11 } } as const
+
+  const lapTimeTick = (v: number) => {
+    if (!v) return ''
+    const m = Math.floor(v / 60)
+    const s = (v - m * 60).toFixed(1)
+    return `${m}:${s.padStart(4, '0')}`
+  }
+
+  const lapTooltipFormatter = (v: number, name: string) => {
+    const didStr = name.replace(/^t_/, '')
+    const did = Number(didStr)
+    const driverName = compareDriverInfo.get(did)?.name ?? `#${did}`
+    return [fmtLap(v), driverName]
+  }
+
+  const deltaTooltipFormatter = (v: number, name: string) => {
+    const did = Number(name.replace(/^cd_/, ''))
+    const driverName = compareDriverInfo.get(did)?.name ?? `#${did}`
+    return [`${fmtDelta(v)}s`, driverName]
+  }
+
+  const hasTireData = tireWearData.length > 0
+
+  return (
+    <div style={{ padding: '12px 16px', overflow: 'auto' }}>
+      {/* Chart 1: Lap Times */}
+      <div style={chartStyle}>
+        {chartTitle('LAP TIME PROGRESSION')}
+        <ResponsiveContainer width="100%" height={220}>
+          <LineChart data={lapTimeData} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+            <CartesianGrid {...gridProps} />
+            <XAxis dataKey="lap" {...axisProps} label={{ value: 'Lap', position: 'insideBottomRight', fill: '#555', fontSize: 10 }} />
+            <YAxis tickFormatter={lapTimeTick} {...axisProps} width={52} domain={['auto', 'auto']} />
+            <Tooltip
+              formatter={lapTooltipFormatter as never}
+              contentStyle={{ background: '#1a1a1a', border: `1px solid ${colors.border}`, borderRadius: 4, fontSize: 12 }}
+              labelFormatter={l => `Lap ${l}`}
+            />
+            <Legend formatter={(v) => {
+              const did = Number(v.replace(/^t_/, ''))
+              return compareDriverInfo.get(did)?.name ?? `#${did}`
+            }} wrapperStyle={{ fontSize: 12, color: '#999' }} />
+            {pitLaps.map(({ lap, did }) => (
+              <ReferenceLine key={`pit_${lap}_${did}`} x={lap} stroke={driverColor(compareDriverIds.indexOf(did))} strokeDasharray="2 6" strokeOpacity={0.4} />
+            ))}
+            {compareDriverIds.map((did, i) => (
+              <Line
+                key={did}
+                dataKey={`t_${did}`}
+                stroke={driverColor(i)}
+                dot={false}
+                strokeWidth={2}
+                connectNulls={false}
+                activeDot={{ r: 4 }}
+              />
+            ))}
+          </LineChart>
+        </ResponsiveContainer>
+      </div>
+
+      {/* Chart 2: Cumulative Delta */}
+      {compareDriverIds.length > 1 && (
+        <div style={chartStyle}>
+          {chartTitle('CUMULATIVE DELTA vs REFERENCE')}
+          <ResponsiveContainer width="100%" height={180}>
+            <LineChart data={cumDeltaData} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+              <CartesianGrid {...gridProps} />
+              <XAxis dataKey="lap" {...axisProps} />
+              <YAxis tickFormatter={v => `${fmtDelta(v)}s`} {...axisProps} width={52} domain={['auto', 'auto']} />
+              <Tooltip
+                formatter={deltaTooltipFormatter as never}
+                contentStyle={{ background: '#1a1a1a', border: `1px solid ${colors.border}`, borderRadius: 4, fontSize: 12 }}
+                labelFormatter={l => `Lap ${l}`}
+              />
+              <ReferenceLine y={0} stroke="#555" />
+              {compareDriverIds.filter(id => id !== refId).map(did => (
+                <Line
+                  key={did}
+                  dataKey={`cd_${did}`}
+                  stroke={driverColor(compareDriverIds.indexOf(did))}
+                  dot={false}
+                  strokeWidth={2}
+                  connectNulls
+                />
+              ))}
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+
+      {/* Chart 3: Tire Wear */}
+      {hasTireData && (
+        <div style={chartStyle}>
+          {chartTitle('TIRE WEAR PROGRESSION')}
+          <ResponsiveContainer width="100%" height={220}>
+            <LineChart data={tireWearData} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+              <CartesianGrid {...gridProps} />
+              <XAxis dataKey="lap" {...axisProps} label={{ value: 'Lap', position: 'insideBottomRight', fill: '#555', fontSize: 10 }} />
+              <YAxis domain={[(dataMin: number) => Math.max(0, Math.floor(dataMin - 5)), 100]} tickFormatter={v => `${v}%`} {...axisProps} width={44} />
+              <Tooltip
+                formatter={(v: unknown, name: unknown) => {
+                  const pct = typeof v === 'number' ? v : Number(v)
+                  const nameStr = typeof name === 'string' ? name : String(name ?? '')
+                  const [pos, didStr] = nameStr.split('_')
+                  const did = Number(didStr)
+                  const dName = compareDriverInfo.get(did)?.name ?? `#${did}`
+                  return [`${pct}%`, `${dName} ${pos.toUpperCase()}`]
+                }}
+                contentStyle={{ background: '#1a1a1a', border: `1px solid ${colors.border}`, borderRadius: 4, fontSize: 12 }}
+                labelFormatter={l => `Lap ${l}`}
+              />
+              <ReferenceLine y={90} stroke="#22c55e" strokeDasharray="4 4" strokeOpacity={0.3} />
+              <ReferenceLine y={80} stroke="#facc15" strokeDasharray="4 4" strokeOpacity={0.3} />
+              <ReferenceLine y={70} stroke="#f97316" strokeDasharray="4 4" strokeOpacity={0.3} />
+              {compareDriverIds.map((did, i) => {
+                const baseColor = driverColor(i)
+                return (
+                  <React.Fragment key={did}>
+                    <Line dataKey={`fl_${did}`} stroke={baseColor} dot={false} strokeWidth={2} connectNulls name={`fl_${did}`} />
+                    <Line dataKey={`fr_${did}`} stroke={baseColor} dot={false} strokeWidth={1.5} strokeDasharray="4 2" connectNulls name={`fr_${did}`} />
+                    <Line dataKey={`rl_${did}`} stroke={baseColor} dot={false} strokeWidth={1.5} strokeDasharray="1 2" connectNulls name={`rl_${did}`} />
+                    <Line dataKey={`rr_${did}`} stroke={baseColor} dot={false} strokeWidth={1} strokeDasharray="2 4" connectNulls name={`rr_${did}`} />
+                  </React.Fragment>
+                )
+              })}
+            </LineChart>
+          </ResponsiveContainer>
+          <div style={{ display: 'flex', gap: 16, justifyContent: 'center', marginTop: 4, flexWrap: 'wrap' }}>
+            {compareDriverIds.map((did, i) => {
+              const color = driverColor(i)
+              const name = compareDriverInfo.get(did)?.name ?? `#${did}`
+              return (
+                <div key={did} style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <span style={{ fontSize: 12, color, fontWeight: 700 }}>{name}</span>
+                  <span style={{ fontSize: 11, color: '#666' }}>— FL</span>
+                  <span style={{ fontSize: 11, color: '#666' }}>╌ FR</span>
+                  <span style={{ fontSize: 11, color: '#666' }}>··· RL</span>
+                  <span style={{ fontSize: 11, color: '#666' }}>- RR</span>
+                </div>
+              )
+            })}
+          </div>
+        </div>
+      )}
+
+      {!hasTireData && (
+        <div style={{ textAlign: 'center', color: colors.textMuted, fontSize: 12, fontFamily: fonts.body, padding: 8 }}>
+          Tire wear chart will load once lap data is available…
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ── Compare view wrapper ──────────────────────────────────────────────────────
+
+function CompareView({
+  compareDriverIds,
+  compareDriverInfo,
+  compareResult,
+  compareLaps,
+  compareStints,
+  compareTab,
+  onTabChange,
+}: {
+  compareDriverIds: number[]
+  compareDriverInfo: Map<number, PostRaceDriverSummary>
+  compareResult: { reference_driver_id: number; laps: PostRaceComparedLap[] } | null
+  compareLaps: Map<number, PostRaceLapData[]>
+  compareStints: Map<number, PostRaceStintData[]>
+  compareTab: 'laps' | 'stints' | 'charts'
+  onTabChange: (t: 'laps' | 'stints' | 'charts') => void
+}) {
+  const tabBtn = (tab: 'laps' | 'stints' | 'charts', label: string) => (
+    <button
+      key={tab}
+      onClick={() => onTabChange(tab)}
+      style={{
+        background: compareTab === tab ? colors.primary + '22' : 'transparent',
+        border: `1px solid ${compareTab === tab ? colors.primary : colors.border}`,
+        color: compareTab === tab ? colors.primary : colors.textMuted,
+        fontFamily: fonts.body,
+        fontSize: 13,
+        fontWeight: compareTab === tab ? 700 : 400,
+        padding: '3px 14px',
+        borderRadius: 3,
+        cursor: 'pointer',
+        letterSpacing: 0.5,
+      }}
+    >
+      {label}
+    </button>
+  )
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+      {/* Driver header strip */}
+      <div style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 10,
+        padding: '6px 14px',
+        background: '#0e0e0e',
+        borderBottom: `1px solid ${colors.border}`,
+        flexShrink: 0,
+        flexWrap: 'wrap',
+      }}>
+        {compareDriverIds.map((did, i) => {
+          const color = driverColor(i)
+          const driver = compareDriverInfo.get(did)
+          const isRef = i === 0
+          return (
+            <div key={did} style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              padding: '2px 8px',
+              background: color + '18',
+              border: `1px solid ${color}55`,
+              borderRadius: 4,
+            }}>
+              <div style={{ width: 10, height: 10, borderRadius: 2, background: color, flexShrink: 0 }} />
+              <span style={{ fontSize: 13, color, fontWeight: 700 }}>
+                {driver?.name ?? `#${did}`}
+              </span>
+              {driver?.car_class && (
+                <span style={{ fontSize: 11, color: '#666' }}>{driver.car_class}</span>
+              )}
+              {isRef && (
+                <span style={{ fontSize: 11, color: colors.textMuted, letterSpacing: 0.5 }}>REF</span>
+              )}
+            </div>
+          )
+        })}
+        <div style={{ flex: 1 }} />
+        {tabBtn('laps', 'LAPS')}
+        {tabBtn('stints', 'STINTS')}
+        {tabBtn('charts', 'CHARTS')}
+      </div>
+
+      {/* Content */}
+      <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
+        {!compareResult && (
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 120, color: colors.textMuted, fontFamily: fonts.mono, fontSize: 13 }}>
+            Vergleich wird geladen…
+          </div>
+        )}
+        {compareResult && compareTab === 'laps' && (
+          <CompareTableLaps
+            compareDriverIds={compareDriverIds}
+            compareDriverInfo={compareDriverInfo}
+            compareResult={compareResult}
+          />
+        )}
+        {compareResult && compareTab === 'stints' && (
+          <CompareTableStints
+            compareDriverIds={compareDriverIds}
+            compareDriverInfo={compareDriverInfo}
+            compareStints={compareStints}
+          />
+        )}
+        {compareResult && compareTab === 'charts' && (
+          <CompareCharts
+            compareDriverIds={compareDriverIds}
+            compareDriverInfo={compareDriverInfo}
+            compareResult={compareResult}
+            compareLaps={compareLaps}
+          />
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ── Stint summary view ───────────────────────────────────────────────────────
+
+function StintSummaryView({
+  stints,
+  laps,
+}: {
+  stints: PostRaceStintData[]
+  laps: PostRaceLapData[] | null
+}) {
+  const lapRanges = useMemo(() => {
+    const m: Record<number, { first: number; last: number }> = {}
+    if (laps) {
+      for (const lap of laps) {
+        const sn = lap.stint_number
+        if (!m[sn]) m[sn] = { first: lap.lap_num, last: lap.lap_num }
+        else {
+          m[sn].first = Math.min(m[sn].first, lap.lap_num)
+          m[sn].last = Math.max(m[sn].last, lap.lap_num)
+        }
+      }
+    }
+    return m
+  }, [laps])
+
+  const stintStdDevs = useMemo(() => {
+    const m: Record<number, number | null> = {}
+    if (laps) {
+      const byStint: Record<number, number[]> = {}
+      for (const lap of laps) {
+        if (lap.lap_time !== null && lap.lap_time > 0 && !lap.is_pit) {
+          if (!byStint[lap.stint_number]) byStint[lap.stint_number] = []
+          byStint[lap.stint_number].push(lap.lap_time)
+        }
+      }
+      for (const [sn, times] of Object.entries(byStint)) {
+        m[Number(sn)] = stdDev(times)
+      }
+    }
+    return m
+  }, [laps])
+
+  const tireKeys = [
+    ['tw_fl_start', 'tw_fl_end', 'FL'],
+    ['tw_fr_start', 'tw_fr_end', 'FR'],
+    ['tw_rl_start', 'tw_rl_end', 'RL'],
+    ['tw_rr_start', 'tw_rr_end', 'RR'],
+  ] as const
+
+  if (stints.length === 0) {
+    return (
+      <div style={{ padding: 32, textAlign: 'center', color: colors.textMuted, fontFamily: fonts.body }}>
+        No stint data available
+      </div>
+    )
+  }
+
+  return (
+    <div style={{ padding: '12px 16px', display: 'flex', flexDirection: 'column', gap: 10 }}>
+      {stints.map(stint => {
+        const range = lapRanges[stint.stint_number]
+        const lapRange = range
+          ? range.first === range.last ? `Lap ${range.first}` : `Lap ${range.first}–${range.last}`
+          : `${stint.lap_count} Lap${stint.lap_count !== 1 ? 's' : ''}`
+        const compound = parseCompound(stint.compound)
+        const consistency = stintStdDevs[stint.stint_number]
+
+        return (
+          <div key={stint.stint_number} style={{
+            background: colors.bgCard,
+            border: `1px solid ${colors.border}`,
+            borderRadius: 6,
+            padding: '10px 14px',
+          }}>
+            {/* Header */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 10, flexWrap: 'wrap' }}>
+              <span style={{ fontFamily: fonts.heading, fontSize: 16, fontWeight: 700, color: colors.primary, letterSpacing: 1 }}>
+                STINT {stint.stint_number}
+              </span>
+              <span style={{ fontSize: 13, color: colors.textMuted, fontFamily: fonts.mono }}>{lapRange}</span>
+              {compound !== '?' && <CompoundBadge name={compound} />}
+              <span style={{ fontSize: 12, color: colors.textMuted }}>
+                {stint.lap_count} Lap{stint.lap_count !== 1 ? 's' : ''}
+              </span>
+            </div>
+
+            {/* Stats */}
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(110px, 1fr))', gap: '8px 16px' }}>
+              <div>
+                <div style={{ fontSize: 11, color: colors.textMuted, letterSpacing: 0.8, fontWeight: 700 }}>AVG PACE</div>
+                <div style={{ fontSize: 14, fontFamily: fonts.mono, color: colors.text, marginTop: 2 }}>{fmtLap(stint.avg_pace)}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: colors.textMuted, letterSpacing: 0.8, fontWeight: 700 }}>BEST LAP</div>
+                <div style={{ fontSize: 14, fontFamily: fonts.mono, color: '#22c55e', marginTop: 2 }}>{fmtLap(stint.best_lap)}</div>
+              </div>
+              <div>
+                <div style={{ fontSize: 11, color: colors.textMuted, letterSpacing: 0.8, fontWeight: 700 }}>CONSISTENCY</div>
+                <div style={{ fontSize: 14, fontFamily: fonts.mono, color: colors.text, marginTop: 2 }}>
+                  {consistency != null ? `±${consistency.toFixed(3)}s` : '—'}
+                </div>
+              </div>
+              {stint.fuel_start !== null && (
+                <div>
+                  <div style={{ fontSize: 11, color: colors.textMuted, letterSpacing: 0.8, fontWeight: 700 }}>FUEL</div>
+                  <div style={{ fontSize: 14, fontFamily: fonts.mono, color: colors.text, marginTop: 2 }}>
+                    {Math.round((stint.fuel_start ?? 0) * 100)}%
+                    <span style={{ color: colors.textMuted }}> → </span>
+                    {Math.round((stint.fuel_end ?? 0) * 100)}%
+                  </div>
+                  {stint.fuel_consumed !== null && stint.fuel_consumed > 0 && (
+                    <div style={{ fontSize: 12, color: colors.textMuted }}>
+                      −{Math.round(stint.fuel_consumed * 100)}%
+                    </div>
+                  )}
+                </div>
+              )}
+              {/* Tire wear per wheel */}
+              {stint.tw_fl_start !== null && (
+                <div style={{ gridColumn: 'span 2' }}>
+                  <div style={{ fontSize: 11, color: colors.textMuted, letterSpacing: 0.8, fontWeight: 700, marginBottom: 4 }}>TIRE WEAR</div>
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '3px 20px' }}>
+                    {tireKeys.map(([startKey, endKey, label]) => {
+                      const start = stint[startKey] as number | null
+                      const end = stint[endKey] as number | null
+                      return (
+                        <div key={label} style={{ display: 'flex', alignItems: 'center', gap: 5 }}>
+                          <span style={{ fontSize: 11, color: '#666', fontFamily: 'monospace', width: 20, flexShrink: 0 }}>{label}</span>
+                          <span style={{ fontFamily: fonts.mono, fontSize: 13, color: start !== null ? wearColor(start) : colors.textMuted }}>
+                            {start !== null ? `${Math.round(start * 100)}%` : '—'}
+                          </span>
+                          <span style={{ color: colors.textMuted, fontSize: 12 }}>→</span>
+                          <span style={{ fontFamily: fonts.mono, fontSize: 13, color: end !== null ? wearColor(end) : colors.textMuted }}>
+                            {end !== null ? `${Math.round(end * 100)}%` : '—'}
+                          </span>
+                          {start !== null && end !== null && (
+                            <span style={{ fontSize: 11, color: colors.textMuted }}>
+                              (−{Math.round((start - end) * 100)}%)
+                            </span>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// ── Detail result row ─────────────────────────────────────────────────────────
+
+interface DetailRowProps {
+  driver: PostRaceDriverSummary
+  overallBest: number
+  classBest: number
+  onSelect: () => void
+  rowIndex: number
+  compareMode: boolean
+  inCompare: boolean
+  compareColor: string | null
+  onToggleCompare: () => void
+}
+
+const DetailRow = memo(function DetailRow({
+  driver, overallBest, classBest, onSelect, rowIndex,
+  compareMode, inCompare, compareColor, onToggleCompare,
+}: DetailRowProps) {
+  const cc = getClassColor(driver.car_class ?? '')
+  const fl = finishLabel(driver.finish_status)
+  const rowBg = rowIndex % 2 === 0 ? colors.bg : '#141414'
 
   const cell: React.CSSProperties = {
     padding: '4px 7px',
     borderBottom: `1px solid ${colors.border}`,
     verticalAlign: 'middle',
-    fontSize: 13,
+    fontSize: 14,
     color: colors.text,
     fontFamily: fonts.body,
     whiteSpace: 'nowrap',
   }
 
-  const isOverallBest = overallBest > 0 && driver.bestLapTime > 0 && driver.bestLapTime === overallBest
-  const isClassBest   = !isOverallBest && classBest > 0 && driver.bestLapTime === classBest
+  const isOverallBest = overallBest > 0 && (driver.best_lap_time ?? 0) > 0 && driver.best_lap_time === overallBest
+  const isClassBest   = !isOverallBest && classBest > 0 && driver.best_lap_time === classBest
   const bestColor = isOverallBest ? '#c026d3' : isClassBest ? '#22c55e' : colors.text
 
   return (
-    <>
-      <tr
-        onClick={onToggle}
-        style={{
-          background: rowBg,
-          cursor: 'pointer',
-          borderLeft: `3px solid ${expanded ? cc : 'transparent'}`,
-          transition: 'background 0.1s',
-        }}
-        title="Click to expand lap detail"
-      >
-        {/* Overall position */}
-        <td style={{ ...cell, color: colors.primary, fontFamily: fonts.heading, fontSize: 22, width: 42, textAlign: 'right', paddingRight: 8 }}>
-          {driver.position > 0 ? driver.position : '–'}
-        </td>
-
-        {/* Class position */}
-        <td style={{ ...cell, width: 36, textAlign: 'center' }}>
-          {driver.classPosition > 0 && (
-            <span style={{
-              background: cc,
-              color: '#fff',
-              borderRadius: 3,
-              padding: '1px 5px',
-              fontSize: 11,
-              fontWeight: 700,
-            }}>
-              C{driver.classPosition}
-            </span>
-          )}
-        </td>
-
-        {/* Car # */}
-        <td style={{ ...cell, width: 38, textAlign: 'center', fontFamily: fonts.mono, color: colors.textMuted }}>
-          #{driver.carNumber}
-        </td>
-
-        {/* Driver + team */}
-        <td style={{ ...cell, maxWidth: 200 }}>
+    <tr
+      onClick={compareMode ? onToggleCompare : onSelect}
+      style={{
+        background: inCompare ? compareColor + '14' : rowBg,
+        cursor: 'pointer',
+        borderLeft: `3px solid ${inCompare && compareColor ? compareColor : 'transparent'}`,
+        transition: 'background 0.1s',
+      }}
+      title={compareMode ? 'Click to toggle compare selection' : 'Click to view lap detail'}
+      onMouseEnter={e => (e.currentTarget.style.background = inCompare && compareColor ? compareColor + '22' : colors.bgCard)}
+      onMouseLeave={e => (e.currentTarget.style.background = inCompare && compareColor ? compareColor + '14' : rowBg)}
+    >
+      {/* Compare checkbox (visible in compare mode) */}
+      {compareMode && (
+        <td style={{ ...cell, width: 28, textAlign: 'center', padding: '4px 4px' }}>
           <div style={{
-            fontWeight: 600, fontSize: 13,
-            overflow: 'hidden', textOverflow: 'ellipsis',
-            color: driver.isPlayer ? colors.accent : colors.text,
+            width: 14, height: 14, borderRadius: 3,
+            border: `2px solid ${inCompare && compareColor ? compareColor : colors.border}`,
+            background: inCompare && compareColor ? compareColor : 'transparent',
+            display: 'inline-flex', alignItems: 'center', justifyContent: 'center',
+            fontSize: 10, color: '#000', fontWeight: 900,
           }}>
-            {driver.isPlayer ? '★ ' : ''}{driver.name}
-          </div>
-          <div style={{ fontSize: 10, color: colors.textMuted, overflow: 'hidden', textOverflow: 'ellipsis' }}>
-            {driver.teamName}
+            {inCompare ? '✓' : ''}
           </div>
         </td>
+      )}
 
-        {/* Class badge */}
-        <td style={{ ...cell, width: 90 }}>
+      {/* Overall position */}
+      <td style={{ ...cell, color: colors.primary, fontFamily: fonts.heading, fontSize: 22, width: 42, textAlign: 'right', paddingRight: 8 }}>
+        {(driver.position ?? 0) > 0 ? driver.position : '–'}
+      </td>
+
+      {/* Class position */}
+      <td style={{ ...cell, width: 36, textAlign: 'center' }}>
+        {(driver.class_position ?? 0) > 0 && (
+          <span style={{
+            background: cc,
+            color: '#fff',
+            borderRadius: 3,
+            padding: '1px 5px',
+            fontSize: 12,
+            fontWeight: 700,
+          }}>
+            C{driver.class_position}
+          </span>
+        )}
+      </td>
+
+      {/* Car # */}
+      <td style={{ ...cell, width: 38, textAlign: 'center', fontFamily: fonts.mono, color: colors.textMuted }}>
+        {driver.car_number !== null ? `#${driver.car_number}` : '–'}
+      </td>
+
+      {/* Driver + team */}
+      <td style={{ ...cell, maxWidth: 200 }}>
+        <div style={{
+          fontWeight: 600, fontSize: 14,
+          overflow: 'hidden', textOverflow: 'ellipsis',
+          color: driver.is_player ? colors.accent : colors.text,
+        }}>
+          {driver.is_player ? '★ ' : ''}{driver.name}
+        </div>
+        <div style={{ fontSize: 11, color: colors.textMuted, overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          {driver.team_name ?? ''}
+        </div>
+      </td>
+
+      {/* Class badge */}
+      <td style={{ ...cell, width: 90 }}>
+        {driver.car_class && (
           <span style={{
             background: cc + '28',
             border: `1px solid ${cc}`,
             color: cc,
             borderRadius: 3,
             padding: '1px 5px',
-            fontSize: 11,
+            fontSize: 12,
             fontWeight: 700,
             letterSpacing: 0.3,
           }}>
-            {driver.carClass || '—'}
+            {driver.car_class}
           </span>
-        </td>
+        )}
+      </td>
 
-        {/* Laps */}
-        <td style={{ ...cell, width: 42, textAlign: 'center', color: colors.textMuted }}>
-          {driver.totalLaps}
-        </td>
+      {/* Laps */}
+      <td style={{ ...cell, width: 42, textAlign: 'center', color: colors.textMuted }}>
+        {driver.total_laps ?? '–'}
+      </td>
 
-        {/* Best lap */}
-        <td style={{ ...cell, width: 105, textAlign: 'right', fontFamily: fonts.mono, color: bestColor, fontWeight: isOverallBest || isClassBest ? 700 : 400 }}>
-          {fmtLap(driver.bestLapTime)}
-        </td>
+      {/* Best lap */}
+      <td style={{ ...cell, width: 105, textAlign: 'right', fontFamily: fonts.mono, color: bestColor, fontWeight: isOverallBest || isClassBest ? 700 : 400 }}>
+        {fmtLap(driver.best_lap_time)}
+      </td>
 
-        {/* Gap */}
-        <td style={{ ...cell, width: 100, textAlign: 'right', fontFamily: fonts.mono, color: isLeader ? colors.success : colors.textMuted, fontSize: 12 }}>
-          {gap}
-        </td>
+      {/* Pits */}
+      <td style={{ ...cell, width: 38, textAlign: 'center' }}>
+        {driver.pitstops ?? '–'}
+      </td>
 
-        {/* Pits */}
-        <td style={{ ...cell, width: 38, textAlign: 'center' }}>
-          {driver.pitstops}
-        </td>
+      {/* Status */}
+      <td style={{ ...cell, width: 48, textAlign: 'center' }}>
+        <span style={{ color: fl.color, fontWeight: 700, fontSize: 13 }}>{fl.text}</span>
+      </td>
 
-        {/* Final tire wear */}
-        <td style={{ ...cell, width: 72, textAlign: 'center' }}>
-          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 3 }}>
-            <TireGrid tires={driver.finalTires} />
-            <TireWearNumeric tires={driver.finalTires} />
-          </div>
-        </td>
-
-        {/* Compound */}
-        <td style={{ ...cell, width: 80, textAlign: 'center' }}>
-          <CompoundBadge name={driver.lastFCompound} />
-        </td>
-
-        {/* Top speed */}
-        <td style={{ ...cell, width: 82, textAlign: 'right', fontFamily: fonts.mono, fontSize: 12 }}>
-          {driver.bestTopSpeed > 0 ? `${driver.bestTopSpeed.toFixed(1)}` : '–'}
-        </td>
-
-        {/* Grid pos */}
-        <td style={{ ...cell, width: 42, textAlign: 'center', color: colors.textMuted, fontSize: 12 }}>
-          P{driver.gridPos}
-        </td>
-
-        {/* Status */}
-        <td style={{ ...cell, width: 48, textAlign: 'center' }}>
-          <span style={{ color: fl.color, fontWeight: 700, fontSize: 12 }}>{fl.text}</span>
-        </td>
-
-        {/* Expand indicator */}
-        <td style={{ ...cell, width: 20, textAlign: 'center', color: colors.textMuted, fontSize: 12 }}>
-          {expanded ? '▲' : '▼'}
-        </td>
-      </tr>
-
-      {expanded && (
-        <tr>
-          <td colSpan={15} style={{ padding: 0, borderBottom: `2px solid ${cc}` }}>
-            <LapDetail laps={driver.laps} overallBest={overallBest} />
-          </td>
-        </tr>
-      )}
-    </>
+      {/* Navigate indicator */}
+      <td style={{ ...cell, width: 24, textAlign: 'center', color: colors.textMuted, fontSize: 14 }}>
+        ›
+      </td>
+    </tr>
   )
 })
 
-// ── Empty / load state ─────────────────────────────────────────────────────────
+// ── Session browser filter bar ────────────────────────────────────────────────
 
-function EmptyState({ onLoad, onLoadFolder, hasDirPicker }: {
-  onLoad: () => void
-  onLoadFolder: () => void
-  hasDirPicker: boolean
+interface BrowserFilters {
+  track: string
+  sessionTypes: Set<string>
+  dateFrom: string
+  dateTo: string
+  gameVersion: string
+  search: string
+}
+
+const ALL_SESSION_TYPES = ['Race', 'Qualifying', 'Practice', 'Warmup']
+
+function FilterBar({
+  filters,
+  onChange,
+  tracks,
+  versions,
+}: {
+  filters: BrowserFilters
+  onChange: (f: BrowserFilters) => void
+  tracks: string[]
+  versions: string[]
 }) {
+  const inputStyle: React.CSSProperties = {
+    background: colors.bgWidget,
+    border: `1px solid ${colors.border}`,
+    color: colors.text,
+    fontFamily: fonts.body,
+    fontSize: 12,
+    padding: '3px 8px',
+    borderRadius: 3,
+    outline: 'none',
+    height: 26,
+  }
+
+  function toggleType(t: string) {
+    const next = new Set(filters.sessionTypes)
+    if (next.has(t)) next.delete(t); else next.add(t)
+    onChange({ ...filters, sessionTypes: next })
+  }
+
   return (
     <div style={{
-      flex: 1,
       display: 'flex',
-      flexDirection: 'column',
       alignItems: 'center',
-      justifyContent: 'center',
-      gap: 20,
-      color: colors.textMuted,
-      fontFamily: fonts.body,
+      gap: 10,
+      padding: '6px 12px',
+      background: '#0e0e0e',
+      borderBottom: `1px solid ${colors.border}`,
+      flexWrap: 'wrap',
+      flexShrink: 0,
     }}>
-      <div style={{ fontSize: 72, opacity: 0.15 }}>📋</div>
-      <div style={{ fontSize: 22, color: colors.text, fontWeight: 600 }}>Session Results</div>
-      <div style={{ fontSize: 14, opacity: 0.6, textAlign: 'center', maxWidth: 480 }}>
-        Load XML result files generated by Le Mans Ultimate.<br />
-        Files are saved in: <code style={{ color: colors.primary }}>UserData\Log\Results\</code>
-      </div>
-      <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', justifyContent: 'center' }}>
-        {hasDirPicker && (
+      {/* Track dropdown */}
+      <select
+        value={filters.track}
+        onChange={e => onChange({ ...filters, track: e.target.value })}
+        style={{ ...inputStyle, minWidth: 130 }}
+        title="Filter by track"
+      >
+        <option value="">All Tracks</option>
+        {tracks.map(t => <option key={t} value={t}>{t}</option>)}
+      </select>
+
+      {/* Game version dropdown */}
+      {versions.length > 0 && (
+        <select
+          value={filters.gameVersion}
+          onChange={e => onChange({ ...filters, gameVersion: e.target.value })}
+          style={{ ...inputStyle, minWidth: 110 }}
+          title="Filter by game version"
+        >
+          <option value="">All Versions</option>
+          {versions.map(v => <option key={v} value={v}>{v}</option>)}
+        </select>
+      )}
+
+      {/* Session type checkboxes */}
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+        {ALL_SESSION_TYPES.map(t => {
+          const { bg } = sessionColors(t)
+          const active = filters.sessionTypes.size === 0 || filters.sessionTypes.has(t)
+          return (
+            <button
+              key={t}
+              onClick={() => toggleType(t)}
+              style={{
+                background: filters.sessionTypes.has(t) ? bg + '33' : 'transparent',
+                border: `1px solid ${filters.sessionTypes.has(t) ? bg : colors.border}`,
+                color: filters.sessionTypes.has(t) ? bg : colors.textMuted,
+                fontFamily: fonts.body,
+                fontSize: 11,
+                fontWeight: 700,
+                padding: '2px 8px',
+                borderRadius: 3,
+                cursor: 'pointer',
+                opacity: active ? 1 : 0.4,
+              }}
+            >
+              {t}
+            </button>
+          )
+        })}
+        {filters.sessionTypes.size > 0 && (
           <button
-            onClick={onLoadFolder}
-            style={{
-              background: colors.primary,
-              border: 'none',
-              color: '#000',
-              fontFamily: fonts.body,
-              fontSize: 15,
-              fontWeight: 700,
-              padding: '10px 24px',
-              borderRadius: 4,
-              cursor: 'pointer',
-              letterSpacing: 0.5,
-            }}
+            onClick={() => onChange({ ...filters, sessionTypes: new Set() })}
+            style={{ background: 'transparent', border: 'none', color: colors.textMuted, fontSize: 11, cursor: 'pointer', padding: '2px 4px' }}
           >
-            Open Results Folder…
+            ✕
           </button>
         )}
-        <button
-          onClick={onLoad}
-          style={{
-            background: hasDirPicker ? colors.bgWidget : colors.primary,
-            border: hasDirPicker ? `1px solid ${colors.border}` : 'none',
-            color: hasDirPicker ? colors.text : '#000',
-            fontFamily: fonts.body,
-            fontSize: 15,
-            fontWeight: 700,
-            padding: '10px 24px',
-            borderRadius: 4,
-            cursor: 'pointer',
-            letterSpacing: 0.5,
-          }}
-        >
-          Open XML File(s)…
-        </button>
       </div>
-      <div style={{ fontSize: 12, opacity: 0.4 }}>
-        Files are read locally — nothing is uploaded
+
+      {/* Date range */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+        <span style={{ fontSize: 11, color: colors.textMuted }}>Von</span>
+        <input
+          type="date"
+          value={filters.dateFrom}
+          onChange={e => onChange({ ...filters, dateFrom: e.target.value })}
+          style={{ ...inputStyle, width: 128, colorScheme: 'dark' }}
+        />
+        <span style={{ fontSize: 11, color: colors.textMuted }}>Bis</span>
+        <input
+          type="date"
+          value={filters.dateTo}
+          onChange={e => onChange({ ...filters, dateTo: e.target.value })}
+          style={{ ...inputStyle, width: 128, colorScheme: 'dark' }}
+        />
+        {(filters.dateFrom || filters.dateTo) && (
+          <button
+            onClick={() => onChange({ ...filters, dateFrom: '', dateTo: '' })}
+            style={{ background: 'transparent', border: 'none', color: colors.textMuted, fontSize: 11, cursor: 'pointer', padding: '2px 4px' }}
+          >
+            ✕
+          </button>
+        )}
       </div>
+
+      {/* Text search */}
+      <input
+        type="search"
+        placeholder="Track / Event…"
+        value={filters.search}
+        onChange={e => onChange({ ...filters, search: e.target.value })}
+        style={{ ...inputStyle, width: 160 }}
+      />
     </div>
   )
 }
 
-// ── Session navigator ──────────────────────────────────────────────────────────
+// ── Session browser table ──────────────────────────────────────────────────────
 
-function SessionNav({
+function SessionBrowser({
   sessions,
-  currentIdx,
   onSelect,
+  importInfo,
 }: {
-  sessions: SessionEntry[]
-  currentIdx: number
-  onSelect: (i: number) => void
+  sessions: PostRaceSessionMeta[]
+  onSelect: (s: PostRaceSessionMeta) => void
+  importInfo: { total: number; newImported: number; filesFound: number; importErrors: number } | null
 }) {
-  if (sessions.length === 0) return null
-  const total = sessions.length
-  const canPrev = currentIdx > 0
-  const canNext = currentIdx < total - 1
+  const thStyle: React.CSSProperties = {
+    padding: '5px 10px',
+    borderBottom: `2px solid ${colors.border}`,
+    color: colors.primary,
+    fontFamily: fonts.body,
+    fontSize: 11,
+    fontWeight: 700,
+    letterSpacing: 0.6,
+    background: colors.bgCard,
+    position: 'sticky',
+    top: 0,
+    zIndex: 1,
+    whiteSpace: 'nowrap',
+    textAlign: 'left',
+    userSelect: 'none',
+  }
 
-  const btnStyle = (enabled: boolean): React.CSSProperties => ({
-    background: 'transparent',
-    border: `1px solid ${enabled ? colors.border : colors.border + '44'}`,
-    color: enabled ? colors.text : colors.textMuted + '44',
-    fontFamily: fonts.mono,
-    fontSize: 14,
-    width: 28,
-    height: 28,
-    borderRadius: 3,
-    cursor: enabled ? 'pointer' : 'default',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    flexShrink: 0,
-  })
+  if (sessions.length === 0) {
+    const noFiles = importInfo !== null && importInfo.filesFound === 0
+    const hasErrors = importInfo !== null && importInfo.importErrors > 0
+    return (
+      <div style={{
+        flex: 1,
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        justifyContent: 'center',
+        gap: 12,
+        color: colors.textMuted,
+        fontFamily: fonts.body,
+      }}>
+        <div style={{ fontSize: 48, opacity: 0.15 }}>📋</div>
+        {importInfo !== null && importInfo.total === 0 ? (
+          <>
+            <div style={{ fontSize: 17, color: colors.text }}>
+              {noFiles ? 'No result files found' : 'No sessions available'}
+            </div>
+            <div style={{ fontSize: 14, color: colors.textMuted, textAlign: 'center', maxWidth: 480, lineHeight: 1.6 }}>
+              {noFiles
+                ? 'The bridge looks for XML files in:\nC:\\Program Files (x86)\\Steam\\steamapps\\common\\Le Mans Ultimate\\UserData\\Log\\Results'
+                : 'Files were found, but none could be imported.'}
+            </div>
+            {noFiles && (
+              <div style={{ fontSize: 13, color: colors.textMuted }}>
+                Start LMU, complete a race, then click Refresh.
+              </div>
+            )}
+            {hasErrors && (
+              <div style={{ fontSize: 13, color: '#f97316' }}>
+                {importInfo.importErrors} file{importInfo.importErrors !== 1 ? 's' : ''} could not be imported.
+              </div>
+            )}
+          </>
+        ) : (
+          <div style={{ fontSize: 18, color: colors.text }}>No sessions match the current filters</div>
+        )}
+      </div>
+    )
+  }
 
   return (
-    <div style={{ display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
-      <button
-        style={btnStyle(canPrev)}
-        onClick={() => canPrev && onSelect(currentIdx - 1)}
-        title="Newer session"
-      >
-        ‹
-      </button>
-      <span style={{
-        fontSize: 12,
-        color: colors.textMuted,
-        fontFamily: fonts.mono,
-        minWidth: 44,
-        textAlign: 'center',
-        userSelect: 'none',
-      }}>
-        {currentIdx + 1} / {total}
-      </span>
-      <button
-        style={btnStyle(canNext)}
-        onClick={() => canNext && onSelect(currentIdx + 1)}
-        title="Older session"
-      >
-        ›
-      </button>
+    <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'auto' }}>
+        <thead>
+          <tr>
+            <th style={{ ...thStyle }}>DATE</th>
+            <th style={{ ...thStyle }}>TRACK</th>
+            <th style={{ ...thStyle }}>EVENT</th>
+            <th style={{ ...thStyle, textAlign: 'center' }}>TYPE</th>
+            <th style={{ ...thStyle }}>VERSION</th>
+            <th style={{ ...thStyle, textAlign: 'right' }}>DRIVERS</th>
+            <th style={{ ...thStyle, textAlign: 'right' }}>LAPS</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sessions.map((s, idx) => {
+            const sessionType = normalizeSessionType(s.session_type)
+            const rowBg = idx % 2 === 0 ? colors.bg : '#141414'
+            return (
+              <tr
+                key={s.id}
+                onClick={() => onSelect(s)}
+                style={{ background: rowBg, cursor: 'pointer', transition: 'background 0.1s' }}
+                onMouseEnter={e => (e.currentTarget.style.background = colors.bgCard)}
+                onMouseLeave={e => (e.currentTarget.style.background = rowBg)}
+              >
+                <td style={{ padding: '6px 10px', borderBottom: `1px solid ${colors.border}`, fontFamily: fonts.mono, fontSize: 14, color: colors.text, whiteSpace: 'nowrap' }}>
+                  {formatDateTime(s.date_time)}
+                </td>
+                <td style={{ padding: '6px 10px', borderBottom: `1px solid ${colors.border}`, fontSize: 15, color: colors.text, fontFamily: fonts.body, whiteSpace: 'nowrap' }}>
+                  {s.track_venue ?? '—'}
+                </td>
+                <td style={{ padding: '6px 10px', borderBottom: `1px solid ${colors.border}`, fontSize: 14, color: colors.textMuted, fontFamily: fonts.body }}>
+                  {s.track_event ?? '—'}
+                </td>
+                <td style={{ padding: '6px 10px', borderBottom: `1px solid ${colors.border}`, textAlign: 'center' }}>
+                  <SessionTypeBadge type={sessionType} />
+                </td>
+                <td style={{ padding: '6px 10px', borderBottom: `1px solid ${colors.border}`, fontSize: 13, color: colors.textMuted, fontFamily: fonts.mono, whiteSpace: 'nowrap' }}>
+                  {s.game_version ?? '—'}
+                </td>
+                <td style={{ padding: '6px 10px', borderBottom: `1px solid ${colors.border}`, textAlign: 'right', fontFamily: fonts.mono, fontSize: 15, color: colors.text }}>
+                  {s.driver_count}
+                </td>
+                <td style={{ padding: '6px 10px', borderBottom: `1px solid ${colors.border}`, textAlign: 'right', fontFamily: fonts.mono, fontSize: 15, color: colors.textMuted }}>
+                  {s.race_laps ?? s.total_laps}
+                </td>
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
     </div>
   )
 }
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-const hasDirPicker = typeof window !== 'undefined' && 'showDirectoryPicker' in window
+type ViewState = 'loading' | 'browser' | 'loading_detail' | 'detail' | 'driver_detail' | 'compare' | 'error'
 
 export default function PostRaceResults({ onClose }: { onClose: () => void }) {
-  const [sessions, setSessions]         = useState<SessionEntry[]>([])
-  const [currentIdx, setCurrentIdx]     = useState(0)
-  const [error, setError]               = useState<string | null>(null)
-  const [loading, setLoading]           = useState(false)
-  const [classFilter, setClassFilter]   = useState<string>('All')
-  const [expandedDriver, setExpandedDriver] = useState<string | null>(null)
-  const [sortCol, setSortCol]           = useState<'pos' | 'best' | 'speed' | 'laps'>('pos')
-  const [sortDir, setSortDir]           = useState<'asc' | 'desc'>('asc')
+  // WS
+  const wsRef = useRef<WebSocket | null>(null)
+  const viewRef = useRef<ViewState>('loading')
 
-  const fileInputRef = useRef<HTMLInputElement>(null)
+  // View state
+  const [view, setView] = useState<ViewState>('loading')
+  const [error, setError] = useState<string | null>(null)
 
-  const raceData: RaceData | null = sessions[currentIdx]?.data ?? null
-  const fileName: string = sessions[currentIdx]?.name ?? ''
+  // Session browser data
+  const [allSessions, setAllSessions]       = useState<PostRaceSessionMeta[]>([])
+  const [selectedSession, setSelectedSession] = useState<PostRaceSessionMeta | null>(null)
+  const [importInfo, setImportInfo]           = useState<{ total: number; newImported: number; filesFound: number; importErrors: number } | null>(null)
 
-  function resetView() {
-    setClassFilter('All')
-    setExpandedDriver(null)
-    setSortCol('pos')
-    setSortDir('asc')
-    setError(null)
-  }
+  // Session detail data
+  const [drivers, setDrivers]               = useState<PostRaceDriverSummary[]>([])
+  const [driverLaps, setDriverLaps]         = useState<Map<number, PostRaceLapData[]>>(new Map())
+  const [driverStints, setDriverStints]     = useState<Map<number, PostRaceStintData[]>>(new Map())
 
-  function selectSession(idx: number) {
-    setCurrentIdx(idx)
-    resetView()
-  }
+  // Detail view controls
+  const [classFilter, setClassFilter]       = useState<string>('All')
+  const [sortCol, setSortCol]               = useState<'pos' | 'best' | 'laps'>('pos')
+  const [sortDir, setSortDir]               = useState<'asc' | 'desc'>('asc')
 
-  // Merge new entries: deduplicate by name, sort newest-first (by name = timestamp prefix), max 10
-  function mergeSessions(incoming: SessionEntry[]) {
-    setSessions((prev) => {
-      const map = new Map<string, SessionEntry>()
-      for (const s of prev)      map.set(s.name, s)
-      for (const s of incoming)  map.set(s.name, s)
-      const merged = Array.from(map.values())
-        .sort((a, b) => b.name.localeCompare(a.name))
-        .slice(0, 10)
-      return merged
+  // Driver detail
+  const [selectedDriver, setSelectedDriver] = useState<PostRaceDriverSummary | null>(null)
+  const [driverDetailTab, setDriverDetailTab] = useState<'laps' | 'stints'>('laps')
+
+  // Compare
+  const [compareMode, setCompareMode]           = useState(false)
+  const [compareDriverIds, setCompareDriverIds] = useState<number[]>([])
+  const [compareDriverInfo, setCompareDriverInfo] = useState<Map<number, PostRaceDriverSummary>>(new Map())
+  const [compareLaps, setCompareLaps]           = useState<Map<number, PostRaceLapData[]>>(new Map())
+  const [compareStints, setCompareStints]       = useState<Map<number, PostRaceStintData[]>>(new Map())
+  const [compareResult, setCompareResult]       = useState<{ reference_driver_id: number; laps: PostRaceComparedLap[] } | null>(null)
+  const [compareTab, setCompareTab]             = useState<'laps' | 'stints' | 'charts'>('laps')
+
+  // Browser filters
+  const [filters, setFilters] = useState<BrowserFilters>({
+    track: '',
+    sessionTypes: new Set(),
+    dateFrom: '',
+    dateTo: '',
+    gameVersion: '',
+    search: '',
+  })
+
+  // Scale
+  const SCALE_MIN = 0.5
+  const SCALE_MAX = 2.0
+  const SCALE_STEP = 0.1
+  const LS_SCALE_KEY = 'post-race-scale'
+  const [scale, setScaleState] = useState<number>(() => {
+    const v = parseFloat(localStorage.getItem(LS_SCALE_KEY) ?? '1')
+    return isNaN(v) ? 1 : Math.min(SCALE_MAX, Math.max(SCALE_MIN, v))
+  })
+  function adjustScale(delta: number) {
+    setScaleState(prev => {
+      const next = Math.round(Math.min(SCALE_MAX, Math.max(SCALE_MIN, prev + delta)) * 10) / 10
+      localStorage.setItem(LS_SCALE_KEY, String(next))
+      return next
     })
-    setCurrentIdx(0)
   }
 
-  async function loadFiles(files: FileList | File[]) {
-    const arr = Array.from(files).filter((f) => f.name.toLowerCase().endsWith('.xml'))
-    if (arr.length === 0) return
-    setLoading(true)
-    const results: SessionEntry[] = []
-    for (const file of arr) {
+  // ── WebSocket ────────────────────────────────────────────────────────────────
+
+  function goTo(v: ViewState) {
+    viewRef.current = v
+    setView(v)
+  }
+
+  const sendCmd = useCallback((cmd: object) => {
+    const ws = wsRef.current
+    if (ws && ws.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(cmd))
+    }
+  }, [])
+
+  useEffect(() => {
+    const { wsHost, wsPort } = useSettingsStore.getState()
+    const host = (wsHost || '').trim() || window.location.hostname
+    const url = `ws://${host}:${wsPort}`
+    const ws = new WebSocket(url)
+    wsRef.current = ws
+    ws.binaryType = 'arraybuffer'
+
+    ws.onopen = () => {
+      ws.send(JSON.stringify({ command: 'post_race_init' }))
+    }
+
+    ws.onmessage = (event) => {
       try {
-        const text = await file.text()
-        const data = parseRaceXML(text, file.name)
-        results.push({ name: file.name, data })
-      } catch {
-        // skip unreadable files silently when loading multiple
-        if (arr.length === 1) setError((new Error(`Failed to parse "${file.name}"`)).message)
-      }
-    }
-    if (results.length > 0) {
-      mergeSessions(results)
-      resetView()
-    }
-    setLoading(false)
-  }
-
-  const openFile = () => fileInputRef.current?.click()
-
-  const handleFile = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      loadFiles(e.target.files)
-    }
-    e.target.value = ''
-  }
-
-  async function openFolder() {
-    if (!hasDirPicker) return
-    try {
-      // @ts-ignore — File System Access API
-      const dirHandle = await window.showDirectoryPicker({ mode: 'read' })
-      setLoading(true)
-      const files: File[] = []
-      // @ts-ignore
-      for await (const entry of dirHandle.values()) {
-        if (entry.kind === 'file' && entry.name.toLowerCase().endsWith('.xml')) {
-          // @ts-ignore
-          const file: File = await entry.getFile()
-          files.push(file)
+        let msg: PostRaceMsg
+        if (event.data instanceof ArrayBuffer) {
+          msg = decode(new Uint8Array(event.data)) as PostRaceMsg
+        } else {
+          msg = JSON.parse(event.data as string) as PostRaceMsg
         }
+        handleMsg(msg)
+      } catch { /* malformed */ }
+    }
+
+    ws.onerror = () => {
+      viewRef.current = 'error'
+      setError('WebSocket-Verbindung fehlgeschlagen.')
+      setView('error')
+    }
+
+    ws.onclose = () => {
+      if (viewRef.current === 'loading' || viewRef.current === 'loading_detail') {
+        viewRef.current = 'error'
+        setError('Verbindung zum Bridge getrennt.')
+        setView('error')
       }
-      // Sort by name desc (newest first due to timestamp prefix), take 10
-      files.sort((a, b) => b.name.localeCompare(a.name))
-      await loadFiles(files.slice(0, 10))
-    } catch (err: unknown) {
-      // User cancelled picker — not an error
-      if ((err as Error)?.name !== 'AbortError') {
-        setError(`Could not open folder: ${(err as Error).message}`)
-      }
-      setLoading(false)
+    }
+
+    return () => {
+      ws.onclose = null
+      ws.close()
+      wsRef.current = null
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  function handleMsg(msg: PostRaceMsg) {
+    switch (msg.type) {
+      case 'PostRaceSessions':
+        setAllSessions(msg.sessions)
+        setImportInfo({ total: msg.total_sessions, newImported: msg.new_imported, filesFound: msg.files_found, importErrors: msg.import_errors })
+        goTo('browser')
+        break
+
+      case 'PostRaceSessionDetail':
+        setDrivers(msg.drivers)
+        setDriverLaps(new Map())
+        setDriverStints(new Map())
+        setSelectedDriver(null)
+        setClassFilter('All')
+        setSortCol('pos')
+        setSortDir('asc')
+        goTo('detail')
+        break
+
+      case 'PostRaceDriverLaps':
+        setDriverLaps(prev => { const n = new Map(prev); n.set(msg.driver_id, msg.laps); return n })
+        setCompareLaps(prev => { const n = new Map(prev); n.set(msg.driver_id, msg.laps); return n })
+        break
+
+      case 'PostRaceStintSummary':
+        setDriverStints(prev => { const n = new Map(prev); n.set(msg.driver_id, msg.stints); return n })
+        setCompareStints(prev => { const n = new Map(prev); n.set(msg.driver_id, msg.stints); return n })
+        break
+
+      case 'PostRaceCompare':
+        setCompareResult({ reference_driver_id: msg.reference_driver_id, laps: msg.laps })
+        break
+
+      case 'PostRaceError':
+        setError(msg.message)
+        goTo('error')
+        break
     }
   }
 
-  // Distinct class list in order of first appearance
+  // ── Session selection ────────────────────────────────────────────────────────
+
+  function openSession(s: PostRaceSessionMeta) {
+    setSelectedSession(s)
+    goTo('loading_detail')
+    sendCmd({ command: 'post_race_session_detail', session_id: s.id })
+  }
+
+  function backToBrowser() {
+    setSelectedSession(null)
+    goTo('browser')
+  }
+
+  // ── Driver detail navigation ──────────────────────────────────────────────
+
+  function openDriver(driver: PostRaceDriverSummary) {
+    setSelectedDriver(driver)
+    setDriverDetailTab('laps')
+    goTo('driver_detail')
+    if (!driverLaps.has(driver.id)) {
+      sendCmd({ command: 'post_race_driver_laps', driver_id: driver.id })
+    }
+    if (!driverStints.has(driver.id)) {
+      sendCmd({ command: 'post_race_stint_summary', driver_id: driver.id })
+    }
+  }
+
+  function backToDetail() {
+    setSelectedDriver(null)
+    goTo('detail')
+  }
+
+  // ── Compare ───────────────────────────────────────────────────────────────
+
+  function toggleCompareDriver(driver: PostRaceDriverSummary) {
+    const id = driver.id
+    setCompareDriverIds(prev => {
+      if (prev.includes(id)) return prev.filter(x => x !== id)
+      return [...prev, id]
+    })
+    setCompareDriverInfo(prev => {
+      const n = new Map(prev)
+      if (n.has(id)) n.delete(id); else n.set(id, driver)
+      return n
+    })
+  }
+
+  function clearCompare() {
+    setCompareDriverIds([])
+    setCompareDriverInfo(new Map())
+    setCompareResult(null)
+    setCompareMode(false)
+  }
+
+  function openCompare() {
+    setCompareResult(null)
+    setCompareTab('laps')
+    goTo('compare')
+    for (const id of compareDriverIds) {
+      if (!compareLaps.has(id)) sendCmd({ command: 'post_race_driver_laps', driver_id: id })
+      if (!compareStints.has(id)) sendCmd({ command: 'post_race_stint_summary', driver_id: id })
+    }
+    sendCmd({ command: 'post_race_compare', driver_ids: compareDriverIds })
+  }
+
+  function backFromCompare() {
+    goTo(selectedSession ? 'detail' : 'browser')
+  }
+
+  // ── Derived state (browser) ───────────────────────────────────────────────
+
+  const tracks = useMemo(() =>
+    [...new Set(allSessions.map(s => s.track_venue).filter(Boolean) as string[])].sort(),
+    [allSessions])
+
+  const versions = useMemo(() =>
+    [...new Set(allSessions.map(s => s.game_version).filter(Boolean) as string[])].sort().reverse(),
+    [allSessions])
+
+  const filteredSessions = useMemo(() => {
+    return allSessions.filter(s => {
+      if (filters.track && s.track_venue !== filters.track) return false
+      if (filters.gameVersion && s.game_version !== filters.gameVersion) return false
+      if (filters.sessionTypes.size > 0) {
+        const st = normalizeSessionType(s.session_type)
+        if (!filters.sessionTypes.has(st)) return false
+      }
+      if (filters.dateFrom) {
+        const d = parseDateTime(s.date_time)
+        if (!d || d < new Date(filters.dateFrom)) return false
+      }
+      if (filters.dateTo) {
+        const d = parseDateTime(s.date_time)
+        const to = new Date(filters.dateTo)
+        to.setDate(to.getDate() + 1)
+        if (!d || d >= to) return false
+      }
+      if (filters.search) {
+        const q = filters.search.toLowerCase()
+        const hay = `${s.track_venue ?? ''} ${s.track_event ?? ''}`.toLowerCase()
+        if (!hay.includes(q)) return false
+      }
+      return true
+    })
+  }, [allSessions, filters])
+
+  // ── Derived state (detail) ────────────────────────────────────────────────
+
   const allClasses = useMemo(() => {
-    if (!raceData) return []
     const seen = new Set<string>()
     const out: string[] = []
-    for (const d of raceData.drivers) {
-      if (d.carClass && !seen.has(d.carClass)) {
-        seen.add(d.carClass)
-        out.push(d.carClass)
-      }
+    for (const d of drivers) {
+      const cls = d.car_class ?? ''
+      if (cls && !seen.has(cls)) { seen.add(cls); out.push(cls) }
     }
     return out
-  }, [raceData])
-
-  // Per-class leader for gap computation
-  const classLeaders = useMemo(() => {
-    if (!raceData) return {}
-    const map: Record<string, DriverResult> = {}
-    for (const d of raceData.drivers) {
-      if (d.classPosition === 1) map[d.carClass] = d
-    }
-    return map
-  }, [raceData])
-
-  function computeGap(d: DriverResult): string {
-    if (d.classPosition === 1) return 'LEAD'
-    if (d.finishStatus === 'DNF' || d.finishStatus === 'DQ') return d.finishStatus
-    const leader = classLeaders[d.carClass]
-    if (!leader) return '–'
-    if (d.totalLaps < leader.totalLaps) {
-      const n = leader.totalLaps - d.totalLaps
-      return `+${n} lap${n > 1 ? 's' : ''}`
-    }
-    if (leader.finishTime > 0 && d.finishTime > 0) {
-      const delta = d.finishTime - leader.finishTime
-      return delta >= 0 ? `+${delta.toFixed(3)}s` : 'LEAD'
-    }
-    return '–'
-  }
+  }, [drivers])
 
   const overallBest = useMemo(() => {
-    if (!raceData) return -1
-    const valid = raceData.drivers.map((d) => d.bestLapTime).filter((t) => t > 0)
+    const valid = drivers.map(d => d.best_lap_time ?? 0).filter(t => t > 0)
     return valid.length > 0 ? Math.min(...valid) : -1
-  }, [raceData])
+  }, [drivers])
 
   const classBests = useMemo(() => {
-    if (!raceData) return {} as Record<string, number>
     const m: Record<string, number> = {}
-    for (const d of raceData.drivers) {
-      if (d.bestLapTime > 0) {
-        if (!m[d.carClass] || d.bestLapTime < m[d.carClass]) {
-          m[d.carClass] = d.bestLapTime
-        }
-      }
+    for (const d of drivers) {
+      const cls = d.car_class ?? ''
+      const t = d.best_lap_time ?? 0
+      if (t > 0 && (!m[cls] || t < m[cls])) m[cls] = t
     }
     return m
-  }, [raceData])
+  }, [drivers])
 
   const displayedDrivers = useMemo(() => {
-    if (!raceData) return []
     let list = classFilter === 'All'
-      ? raceData.drivers
-      : raceData.drivers.filter((d) => d.carClass === classFilter)
+      ? drivers
+      : drivers.filter(d => d.car_class === classFilter)
 
     list = [...list].sort((a, b) => {
       let av: number, bv: number
       if (sortCol === 'best') {
-        av = a.bestLapTime > 0 ? a.bestLapTime : 999999
-        bv = b.bestLapTime > 0 ? b.bestLapTime : 999999
-      } else if (sortCol === 'speed') {
-        av = a.bestTopSpeed
-        bv = b.bestTopSpeed
+        av = (a.best_lap_time ?? 0) > 0 ? (a.best_lap_time!) : 999999
+        bv = (b.best_lap_time ?? 0) > 0 ? (b.best_lap_time!) : 999999
       } else if (sortCol === 'laps') {
-        av = a.totalLaps
-        bv = b.totalLaps
+        av = a.total_laps ?? 0
+        bv = b.total_laps ?? 0
       } else {
-        av = a.position > 0 ? a.position : 999
-        bv = b.position > 0 ? b.position : 999
+        av = (a.position ?? 0) > 0 ? a.position! : 999
+        bv = (b.position ?? 0) > 0 ? b.position! : 999
       }
       return sortDir === 'asc' ? av - bv : bv - av
     })
 
     return list
-  }, [raceData, classFilter, sortCol, sortDir])
+  }, [drivers, classFilter, sortCol, sortDir])
 
   function onSort(col: typeof sortCol) {
-    if (col === sortCol) setSortDir((d) => d === 'asc' ? 'desc' : 'asc')
+    if (col === sortCol) setSortDir(d => d === 'asc' ? 'desc' : 'asc')
     else { setSortCol(col); setSortDir('asc') }
   }
 
-  // ── Styles ─────────────────────────────────────────────────────────────────
+  // ── Shared styles ─────────────────────────────────────────────────────────
+
+  const btnStyle: React.CSSProperties = {
+    background: colors.bgWidget,
+    border: `1px solid ${colors.border}`,
+    color: colors.text,
+    fontFamily: fonts.body,
+    fontSize: 14,
+    padding: '3px 10px',
+    borderRadius: 3,
+    cursor: 'pointer',
+    flexShrink: 0,
+  }
 
   const thBase: React.CSSProperties = {
     padding: '5px 7px',
@@ -973,17 +2036,13 @@ export default function PostRaceResults({ onClose }: { onClose: () => void }) {
     )
   }
 
-  const btnStyle: React.CSSProperties = {
-    background: colors.bgWidget,
-    border: `1px solid ${colors.border}`,
-    color: colors.text,
-    fontFamily: fonts.body,
-    fontSize: 12,
-    padding: '3px 10px',
-    borderRadius: 3,
-    cursor: 'pointer',
-    flexShrink: 0,
-  }
+  // ── Session type for selected session ────────────────────────────────────
+
+  const detailSessionType = selectedSession
+    ? normalizeSessionType(selectedSession.session_type)
+    : ''
+
+  // ── Render ────────────────────────────────────────────────────────────────
 
   return (
     <div style={{
@@ -994,7 +2053,7 @@ export default function PostRaceResults({ onClose }: { onClose: () => void }) {
       fontFamily: fonts.body,
       overflow: 'hidden',
     }}>
-      {/* ── Top control bar ─────────────────────────────────────────────────── */}
+      {/* ── Top control bar ───────────────────────────────────────────────── */}
       <div style={{
         display: 'flex',
         alignItems: 'center',
@@ -1016,187 +2075,479 @@ export default function PostRaceResults({ onClose }: { onClose: () => void }) {
           SESSION RESULTS
         </span>
 
-        {/* Session navigator */}
-        {sessions.length > 0 && (
+        {/* Breadcrumb */}
+        {(view === 'detail' || view === 'driver_detail') && selectedSession && (
           <>
             <div style={{ width: 1, height: 20, background: colors.border }} />
-            <SessionNav sessions={sessions} currentIdx={currentIdx} onSelect={selectSession} />
-            {fileName && (
-              <span style={{ fontSize: 11, color: colors.textMuted, fontFamily: fonts.mono, overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: 260 }}>
-                {fileName}
-              </span>
+            <button onClick={backToBrowser} style={{ ...btnStyle, color: colors.textMuted }}>← Sessions</button>
+            <span style={{ color: colors.border }}>/</span>
+            {view === 'driver_detail'
+              ? <button onClick={backToDetail} style={{ ...btnStyle, color: colors.textMuted }}>{selectedSession.track_venue ?? '—'}</button>
+              : <span style={{ fontSize: 15, color: colors.text, fontFamily: fonts.body }}>{selectedSession.track_venue ?? '—'}</span>
+            }
+            <SessionTypeBadge type={detailSessionType} />
+            <span style={{ fontSize: 11, color: colors.textMuted, fontFamily: fonts.mono }}>{formatDateTime(selectedSession.date_time)}</span>
+            {view === 'driver_detail' && selectedDriver && (
+              <>
+                <span style={{ color: colors.border }}>/</span>
+                <span style={{ fontSize: 15, color: colors.text, fontFamily: fonts.body }}>
+                  {selectedDriver.is_player ? '★ ' : ''}{selectedDriver.name}
+                </span>
+              </>
             )}
           </>
         )}
-
-        {/* File open buttons */}
-        <div style={{ width: 1, height: 20, background: colors.border, flexShrink: 0 }} />
-        {hasDirPicker && (
-          <button onClick={openFolder} style={btnStyle} disabled={loading}>
-            {loading ? 'Loading…' : '📁 Open Folder'}
-          </button>
-        )}
-        <button onClick={openFile} style={btnStyle} disabled={loading}>
-          {sessions.length > 0 ? '+ Add Files' : 'Open XML File(s)…'}
-        </button>
-
-        {/* Class filter pills */}
-        {raceData && (
+        {view === 'compare' && (
           <>
-            <div style={{ width: 1, height: 20, background: colors.border, flexShrink: 0 }} />
-            {(['All', ...allClasses]).map((cls) => {
-              const active = classFilter === cls
-              const cc = cls !== 'All' ? clsColor(cls, allClasses) : colors.textMuted
-              const count = cls === 'All'
-                ? raceData.drivers.length
-                : raceData.drivers.filter((d) => d.carClass === cls).length
-              return (
-                <button
-                  key={cls}
-                  onClick={() => { setClassFilter(cls); setExpandedDriver(null) }}
-                  style={{
-                    background: active ? (cls !== 'All' ? cc + '28' : colors.bgWidget) : 'transparent',
-                    border: `1px solid ${active ? (cls !== 'All' ? cc : colors.primary) : colors.border}`,
-                    color: active ? (cls !== 'All' ? cc : colors.text) : colors.textMuted,
-                    fontFamily: fonts.body,
-                    fontSize: 12,
-                    padding: '2px 8px',
-                    borderRadius: 3,
-                    cursor: 'pointer',
-                    fontWeight: active ? 700 : 400,
-                    flexShrink: 0,
-                  }}
-                >
-                  {cls} ({count})
-                </button>
-              )
-            })}
+            <div style={{ width: 1, height: 20, background: colors.border }} />
+            <button onClick={backFromCompare} style={{ ...btnStyle, color: colors.textMuted }}>← Back</button>
+            <span style={{ color: colors.border }}>/</span>
+            <span style={{ fontSize: 15, color: colors.text, fontFamily: fonts.body }}>
+              Compare ({compareDriverIds.length} drivers)
+            </span>
+          </>
+        )}
+
+        {/* Browser: import info */}
+        {view === 'browser' && importInfo !== null && (
+          <>
+            <div style={{ width: 1, height: 20, background: colors.border }} />
+            <span style={{ fontSize: 13, color: colors.textMuted }}>
+              {importInfo.total} session{importInfo.total !== 1 ? 's' : ''}
+              {importInfo.filesFound > 0 && importInfo.total === 0 && (
+                <span style={{ color: '#f97316' }}> · {importInfo.filesFound} file{importInfo.filesFound !== 1 ? 's' : ''} found, 0 imported</span>
+              )}
+              {importInfo.importErrors > 0 && (
+                <span style={{ color: '#f97316' }}> · {importInfo.importErrors} error{importInfo.importErrors !== 1 ? 's' : ''}</span>
+              )}
+              {importInfo.newImported > 0 && (
+                <span style={{ color: colors.success }}> · {importInfo.newImported} newly imported</span>
+              )}
+            </span>
+            <button
+              onClick={() => sendCmd({ command: 'post_race_init' })}
+              style={{ ...btnStyle, fontSize: 13, color: colors.textMuted }}
+              title="Import new results"
+            >
+              ↻
+            </button>
           </>
         )}
 
         <div style={{ flex: 1 }} />
 
-        <button
-          onClick={onClose}
-          title="Back to dashboard"
-          style={{ ...btnStyle, color: colors.textMuted }}
-        >
+        {/* Compare mode toggle — shown in browser and detail views */}
+        {(view === 'browser' || view === 'detail') && (
+          <button
+            onClick={() => setCompareMode(m => !m)}
+            style={{
+              ...btnStyle,
+              color: compareMode ? colors.primary : colors.textMuted,
+              border: `1px solid ${compareMode ? colors.primary : colors.border}`,
+              background: compareMode ? colors.primary + '18' : colors.bgWidget,
+            }}
+            title="Toggle compare mode to select drivers for head-to-head comparison"
+          >
+            {compareMode ? '⊠ Compare Mode ON' : '⊞ Compare Mode'}
+          </button>
+        )}
+
+        {/* Scale controls */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
+          <button
+            onClick={() => adjustScale(-SCALE_STEP)}
+            disabled={scale <= SCALE_MIN}
+            title="Kleiner"
+            style={{
+              width: 20, height: 20, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: 'transparent', border: `1px solid ${scale <= SCALE_MIN ? '#333' : colors.border}`,
+              color: scale <= SCALE_MIN ? '#333' : colors.textMuted, cursor: scale <= SCALE_MIN ? 'not-allowed' : 'pointer',
+              borderRadius: 3, fontSize: 14, padding: 0, lineHeight: 1,
+            }}
+          >−</button>
+          <span style={{ fontSize: 13, color: colors.textMuted, minWidth: 34, textAlign: 'center', fontFamily: fonts.mono }}>
+            {scale.toFixed(1)}×
+          </span>
+          <button
+            onClick={() => adjustScale(SCALE_STEP)}
+            disabled={scale >= SCALE_MAX}
+            title="Grösser"
+            style={{
+              width: 20, height: 20, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: 'transparent', border: `1px solid ${scale >= SCALE_MAX ? '#333' : colors.border}`,
+              color: scale >= SCALE_MAX ? '#333' : colors.textMuted, cursor: scale >= SCALE_MAX ? 'not-allowed' : 'pointer',
+              borderRadius: 3, fontSize: 14, padding: 0, lineHeight: 1,
+            }}
+          >+</button>
+        </div>
+
+        <button onClick={onClose} title="Back to dashboard" style={{ ...btnStyle, color: colors.textMuted }}>
           ← Dashboard
         </button>
       </div>
 
-      {/* ── Session info strip ──────────────────────────────────────────────── */}
-      {raceData && (
+      {/* ── Scalable content area ─────────────────────────────────────────── */}
+      <div style={{ flex: 1, overflow: 'hidden', position: 'relative', minHeight: 0 }}>
+        <div style={{
+          position: 'absolute', top: 0, left: 0,
+          width: `${100 / scale}%`, height: `${100 / scale}%`,
+          transform: `scale(${scale})`, transformOrigin: 'top left',
+          display: 'flex', flexDirection: 'column', overflow: 'hidden',
+        }}>
+
+      {/* ── Compare tray — persistent when drivers selected ────────────────── */}
+      {compareDriverIds.length > 0 && view !== 'compare' && (
         <div style={{
           display: 'flex',
           alignItems: 'center',
-          gap: 20,
-          padding: '5px 14px',
-          background: '#0e0e0e',
+          gap: 8,
+          padding: '5px 12px',
+          background: '#0c0c0c',
           borderBottom: `1px solid ${colors.border}`,
           flexShrink: 0,
           flexWrap: 'wrap',
         }}>
-          <SessionTypeBadge type={raceData.sessionType} />
-          <InfoChip label="TRACK" value={raceData.trackVenue} />
-          <InfoChip label="EVENT" value={raceData.trackEvent} />
-          <InfoChip label="DATE" value={raceData.timeString} />
-          <InfoChip label="DURATION" value={`${raceData.raceDurationMinutes} min`} />
-          <InfoChip label="TRACK LENGTH" value={`${(raceData.trackLength / 1000).toFixed(3)} km`} />
-          {raceData.fuelMult !== 1 && <InfoChip label="FUEL" value={`×${raceData.fuelMult}`} />}
-          {raceData.tireMult !== 1 && <InfoChip label="TYRE" value={`×${raceData.tireMult}`} />}
+          <span style={{ fontSize: 10, color: colors.textMuted, fontWeight: 700, letterSpacing: 0.8, flexShrink: 0 }}>COMPARE:</span>
+          {compareDriverIds.map((id, i) => {
+            const color = driverColor(i)
+            const driver = compareDriverInfo.get(id)
+            return (
+              <div key={id} style={{
+                display: 'flex', alignItems: 'center', gap: 5,
+                padding: '1px 6px', borderRadius: 3,
+                background: color + '18', border: `1px solid ${color}55`,
+              }}>
+                <div style={{ width: 8, height: 8, borderRadius: 2, background: color }} />
+                <span style={{ fontSize: 11, color, fontWeight: 700 }}>{driver?.name ?? `#${id}`}</span>
+                {i === 0 && <span style={{ fontSize: 9, color: colors.textMuted }}>REF</span>}
+                <button
+                  onClick={() => driver && toggleCompareDriver(driver)}
+                  style={{ background: 'none', border: 'none', color: colors.textMuted, cursor: 'pointer', padding: '0 2px', fontSize: 12, lineHeight: 1 }}
+                >×</button>
+              </div>
+            )
+          })}
           <div style={{ flex: 1 }} />
-          <span style={{ fontSize: 11, color: colors.textMuted }}>
-            <span style={{ color: '#c026d3', fontWeight: 700 }}>■</span> Overall best&nbsp;&nbsp;
-            <span style={{ color: '#22c55e', fontWeight: 700 }}>■</span> Class best&nbsp;&nbsp;
-            <span style={{ color: colors.text }}>★</span> Player
-          </span>
+          <button
+            onClick={clearCompare}
+            style={{ ...btnStyle, fontSize: 11, color: colors.textMuted, padding: '2px 8px' }}
+          >
+            Clear
+          </button>
+          <button
+            onClick={openCompare}
+            disabled={compareDriverIds.length < 2}
+            style={{
+              ...btnStyle,
+              fontSize: 11,
+              padding: '2px 10px',
+              color: compareDriverIds.length >= 2 ? colors.primary : colors.textMuted,
+              border: `1px solid ${compareDriverIds.length >= 2 ? colors.primary : colors.border}`,
+              background: compareDriverIds.length >= 2 ? colors.primary + '18' : colors.bgWidget,
+              cursor: compareDriverIds.length >= 2 ? 'pointer' : 'not-allowed',
+            }}
+          >
+            Compare ({compareDriverIds.length}) →
+          </button>
         </div>
       )}
 
-      {/* ── Main content ────────────────────────────────────────────────────── */}
-      {error && (
+      {/* ── Detail / driver_detail: info + class filter strip ────────────── */}
+      {(view === 'detail' || view === 'driver_detail') && (
+        <>
+          {selectedSession && (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 20,
+              padding: '5px 14px',
+              background: '#0e0e0e',
+              borderBottom: `1px solid ${colors.border}`,
+              flexShrink: 0,
+              flexWrap: 'wrap',
+            }}>
+              <SessionTypeBadge type={detailSessionType} />
+              <InfoChip label="TRACK" value={selectedSession.track_venue ?? ''} />
+              <InfoChip label="EVENT" value={selectedSession.track_event ?? ''} />
+              <InfoChip label="DATE" value={formatDateTime(selectedSession.date_time)} />
+              {selectedSession.race_laps && (
+                <InfoChip label="LAPS" value={String(selectedSession.race_laps)} />
+              )}
+              {selectedSession.game_version && (
+                <InfoChip label="VERSION" value={selectedSession.game_version} />
+              )}
+              <div style={{ flex: 1 }} />
+              <span style={{ fontSize: 13, color: colors.textMuted }}>
+                <span style={{ color: '#c026d3', fontWeight: 700 }}>■</span> Overall best&nbsp;&nbsp;
+                <span style={{ color: '#22c55e', fontWeight: 700 }}>■</span> Class best&nbsp;&nbsp;
+                <span style={{ color: colors.text }}>★</span> Player
+              </span>
+            </div>
+          )}
+
+          {/* Class filter pills — only in session detail */}
+          {view === 'detail' && allClasses.length > 1 && (
+            <div style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              padding: '5px 12px',
+              background: '#0a0a0a',
+              borderBottom: `1px solid ${colors.border}`,
+              flexShrink: 0,
+              flexWrap: 'wrap',
+            }}>
+              {(['All', ...allClasses]).map(cls => {
+                const active = classFilter === cls
+                const cc = cls !== 'All' ? getClassColor(cls) : colors.textMuted
+                const count = cls === 'All'
+                  ? drivers.length
+                  : drivers.filter(d => d.car_class === cls).length
+                return (
+                  <button
+                    key={cls}
+                    onClick={() => setClassFilter(cls)}
+                    style={{
+                      background: active ? (cls !== 'All' ? cc + '28' : colors.bgWidget) : 'transparent',
+                      border: `1px solid ${active ? (cls !== 'All' ? cc : colors.primary) : colors.border}`,
+                      color: active ? (cls !== 'All' ? cc : colors.text) : colors.textMuted,
+                      fontFamily: fonts.body,
+                      fontSize: 12,
+                      padding: '2px 8px',
+                      borderRadius: 3,
+                      cursor: 'pointer',
+                      fontWeight: active ? 700 : 400,
+                      flexShrink: 0,
+                    }}
+                  >
+                    {cls} ({count})
+                  </button>
+                )
+              })}
+            </div>
+          )}
+        </>
+      )}
+
+      {/* ── Browser: filter bar ───────────────────────────────────────────── */}
+      {view === 'browser' && (
+        <FilterBar
+          filters={filters}
+          onChange={setFilters}
+          tracks={tracks}
+          versions={versions}
+        />
+      )}
+
+      {/* ── Main content ──────────────────────────────────────────────────── */}
+
+      {/* Loading sessions */}
+      {(view === 'loading' || view === 'loading_detail') && (
+        <div style={{
+          flex: 1,
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: 16,
+          color: colors.textMuted,
+          fontFamily: fonts.body,
+        }}>
+          <div style={{ fontSize: 48, opacity: 0.2 }}>📋</div>
+          <div style={{ fontSize: 16, color: colors.text }}>
+            {view === 'loading' ? 'Scanning sessions…' : 'Loading session detail…'}
+          </div>
+          <div style={{ fontSize: 12, opacity: 0.5 }}>
+            {view === 'loading' ? 'Importing new result files from LMU folder' : ''}
+          </div>
+        </div>
+      )}
+
+      {/* Error */}
+      {view === 'error' && (
         <div style={{
           flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center',
           flexDirection: 'column', gap: 12, color: colors.danger,
         }}>
           <div style={{ fontSize: 32, opacity: 0.5 }}>⚠</div>
-          <div style={{ fontWeight: 600, fontSize: 16 }}>Failed to load file</div>
+          <div style={{ fontWeight: 600, fontSize: 18 }}>Error</div>
           <div style={{ fontSize: 13, color: colors.textMuted, maxWidth: 400, textAlign: 'center' }}>{error}</div>
           <button
-            onClick={openFile}
-            style={{ marginTop: 8, ...btnStyle, fontSize: 13, padding: '6px 16px' }}
+            onClick={() => {
+              setError(null)
+              goTo('loading')
+              sendCmd({ command: 'post_race_init' })
+            }}
+            style={{ marginTop: 8, ...btnStyle, fontSize: 13, padding: '6px 16px', color: colors.primary }}
           >
-            Try another file
+            Try again
           </button>
         </div>
       )}
 
-      {!error && sessions.length === 0 && (
-        <EmptyState onLoad={openFile} onLoadFolder={openFolder} hasDirPicker={hasDirPicker} />
+      {/* Session browser */}
+      {view === 'browser' && (
+        <SessionBrowser sessions={filteredSessions} onSelect={openSession} importInfo={importInfo} />
       )}
 
-      {!error && raceData && (
+      {/* Session detail */}
+      {view === 'detail' && (
         <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
           <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'auto' }}>
             <thead>
               <tr>
-                <SortTh col="pos"   label="POS"       align="right" />
+                {compareMode && <th style={{ ...thBase, cursor: 'default', width: 28 }} />}
+                <SortTh col="pos"  label="POS"      align="right" />
                 <th style={{ ...thBase, cursor: 'default', textAlign: 'center' }}>CL</th>
                 <th style={{ ...thBase, cursor: 'default', textAlign: 'center' }}>CAR</th>
                 <th style={{ ...thBase, cursor: 'default', textAlign: 'left' }}>DRIVER / TEAM</th>
                 <th style={{ ...thBase, cursor: 'default' }}>CLASS</th>
-                <SortTh col="laps"  label="LAPS"      align="center" />
-                <SortTh col="best"  label="BEST LAP"  align="right" />
-                <th style={{ ...thBase, cursor: 'default', textAlign: 'right' }}>GAP</th>
+                <SortTh col="laps" label="LAPS"     align="center" />
+                <SortTh col="best" label="BEST LAP" align="right" />
                 <th style={{ ...thBase, cursor: 'default', textAlign: 'center' }}>PITS</th>
-                <th style={{ ...thBase, cursor: 'default', textAlign: 'center' }}>TIRES</th>
-                <th style={{ ...thBase, cursor: 'default', textAlign: 'center' }}>CPND</th>
-                <SortTh col="speed" label="TOP km/h"  align="right" />
-                <th style={{ ...thBase, cursor: 'default', textAlign: 'center' }}>GRID</th>
                 <th style={{ ...thBase, cursor: 'default', textAlign: 'center' }}>ST</th>
-                <th style={{ ...thBase, cursor: 'default', width: 20 }} />
+                <th style={{ ...thBase, cursor: 'default', width: 24 }} />
               </tr>
             </thead>
             <tbody>
-              {displayedDrivers.map((d, idx) => (
-                <ResultRow
-                  key={d.name}
-                  driver={d}
-                  allClasses={allClasses}
-                  gap={computeGap(d)}
-                  overallBest={overallBest}
-                  classBest={classBests[d.carClass] ?? -1}
-                  expanded={expandedDriver === d.name}
-                  onToggle={() => setExpandedDriver((prev) => (prev === d.name ? null : d.name))}
-                  rowIndex={idx}
-                />
-              ))}
+              {displayedDrivers.map((d, idx) => {
+                const compareIdx = compareDriverIds.indexOf(d.id)
+                return (
+                  <DetailRow
+                    key={d.id}
+                    driver={d}
+                    overallBest={overallBest}
+                    classBest={classBests[d.car_class ?? ''] ?? -1}
+                    onSelect={() => openDriver(d)}
+                    rowIndex={idx}
+                    compareMode={compareMode}
+                    inCompare={compareIdx >= 0}
+                    compareColor={compareIdx >= 0 ? driverColor(compareIdx) : null}
+                    onToggleCompare={() => toggleCompareDriver(d)}
+                  />
+                )
+              })}
             </tbody>
           </table>
         </div>
       )}
 
-      {/* Hidden file input — multiple files */}
-      <input
-        ref={fileInputRef}
-        type="file"
-        accept=".xml"
-        multiple
-        onChange={handleFile}
-        style={{ display: 'none' }}
-      />
-    </div>
-  )
-}
+      {/* Driver detail */}
+      {view === 'driver_detail' && selectedDriver && (
+        <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+          {/* Driver info strip */}
+          <div style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: 16,
+            padding: '6px 14px',
+            background: '#0e0e0e',
+            borderBottom: `1px solid ${colors.border}`,
+            flexShrink: 0,
+            flexWrap: 'wrap',
+          }}>
+            <span style={{ fontSize: 15, fontWeight: 700, color: selectedDriver.is_player ? colors.accent : colors.text }}>
+              {selectedDriver.is_player ? '★ ' : ''}{selectedDriver.name}
+            </span>
+            {selectedDriver.car_number !== null && (
+              <span style={{ fontSize: 12, color: colors.textMuted, fontFamily: fonts.mono }}>
+                #{selectedDriver.car_number}
+              </span>
+            )}
+            {selectedDriver.car_class && (
+              <span style={{
+                background: getClassColor(selectedDriver.car_class) + '28',
+                border: `1px solid ${getClassColor(selectedDriver.car_class)}`,
+                color: getClassColor(selectedDriver.car_class),
+                borderRadius: 3,
+                padding: '1px 5px',
+                fontSize: 11,
+                fontWeight: 700,
+              }}>
+                {selectedDriver.car_class}
+              </span>
+            )}
+            {selectedDriver.team_name && (
+              <span style={{ fontSize: 11, color: colors.textMuted }}>{selectedDriver.team_name}</span>
+            )}
+            <span style={{ fontSize: 12, color: colors.textMuted, fontFamily: fonts.mono }}>
+              Best: {fmtLap(selectedDriver.best_lap_time)}
+            </span>
+            <div style={{ flex: 1 }} />
+            {/* Tab toggle */}
+            {(['laps', 'stints'] as const).map(tab => (
+              <button
+                key={tab}
+                onClick={() => setDriverDetailTab(tab)}
+                style={{
+                  background: driverDetailTab === tab ? colors.primary + '22' : 'transparent',
+                  border: `1px solid ${driverDetailTab === tab ? colors.primary : colors.border}`,
+                  color: driverDetailTab === tab ? colors.primary : colors.textMuted,
+                  fontFamily: fonts.body,
+                  fontSize: 12,
+                  fontWeight: driverDetailTab === tab ? 700 : 400,
+                  padding: '3px 14px',
+                  borderRadius: 3,
+                  cursor: 'pointer',
+                  letterSpacing: 0.5,
+                }}
+              >
+                {tab === 'laps' ? 'LAPS' : 'STINTS'}
+              </button>
+            ))}
+          </div>
 
-// ── Small helper chip ──────────────────────────────────────────────────────────
+          {/* Content */}
+          <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
+            {driverDetailTab === 'laps' && (
+              driverLaps.has(selectedDriver.id)
+                ? <ServerLapDetail
+                    laps={driverLaps.get(selectedDriver.id)!}
+                    overallBest={overallBest > 0 ? overallBest : 0}
+                  />
+                : (
+                  <div style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    height: 120, color: colors.textMuted, fontFamily: fonts.mono, fontSize: 13,
+                  }}>
+                    Loading laps…
+                  </div>
+                )
+            )}
+            {driverDetailTab === 'stints' && (
+              driverStints.has(selectedDriver.id)
+                ? <StintSummaryView
+                    stints={driverStints.get(selectedDriver.id)!}
+                    laps={driverLaps.get(selectedDriver.id) ?? null}
+                  />
+                : (
+                  <div style={{
+                    display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    height: 120, color: colors.textMuted, fontFamily: fonts.mono, fontSize: 13,
+                  }}>
+                    Loading stints…
+                  </div>
+                )
+            )}
+          </div>
+        </div>
+      )}
 
-function InfoChip({ label, value }: { label: string; value: string }) {
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
-      <span style={{ fontSize: 9, color: colors.textMuted, letterSpacing: 0.8, fontWeight: 700 }}>{label}</span>
-      <span style={{ fontSize: 13, color: colors.text }}>{value || '—'}</span>
+      {/* Compare view */}
+      {view === 'compare' && (
+        <CompareView
+          compareDriverIds={compareDriverIds}
+          compareDriverInfo={compareDriverInfo}
+          compareResult={compareResult}
+          compareLaps={compareLaps}
+          compareStints={compareStints}
+          compareTab={compareTab}
+          onTabChange={setCompareTab}
+        />
+      )}
+
+        </div>{/* end scalable inner */}
+      </div>{/* end scalable wrapper */}
     </div>
   )
 }

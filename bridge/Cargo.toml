@@ -1,6 +1,6 @@
 [package]
 name = "lmu-pitwall"
-version = "1.0.78"
+version = "1.0.84"
 edition = "2021"
 description = "Real-time sim racing dashboard for Le Mans Ultimate"
 authors = ["Swizzjack"]
@@ -25,6 +25,10 @@ anyhow = "1"
 rust-embed = { version = "8" }
 open = "5"
 ureq = { version = "2", default-features = false, features = ["json"] }
+rusqlite = { version = "0.31", features = ["bundled"] }
+quick-xml = { version = "0.37", features = ["encoding"] }
+sha2 = "0.10"
+hex = "0.4"
 
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-sys = { version = "0.59", features = [
