@@ -222,8 +222,8 @@ fn insert_driver(
         "INSERT INTO drivers (
             session_id, name, car_type, car_class, car_number,
             team_name, is_player, position, class_position,
-            best_lap_time, total_laps, pitstops, finish_status
-         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13)",
+            best_lap_time, total_laps, pitstops, finish_status, finish_time
+         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14)",
         rusqlite::params![
             session_id,
             driver.name,
@@ -238,6 +238,7 @@ fn insert_driver(
             driver.total_laps,
             driver.pitstops,
             driver.finish_status,
+            driver.finish_time,
         ],
     )
     .context("INSERT driver")?;
@@ -298,8 +299,9 @@ fn insert_lap(
             s1, s2, s3, top_speed, fuel_level, fuel_used,
             tw_fl, tw_fr, tw_rl, tw_rr,
             compound_fl, compound_fr, compound_rl, compound_rr,
-            is_pit, stint_number, elapsed_time
-         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22)",
+            is_pit, stint_number, elapsed_time,
+            ve_level, ve_used
+         ) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18,?19,?20,?21,?22,?23,?24)",
         rusqlite::params![
             driver_id,
             session_id,
@@ -323,6 +325,8 @@ fn insert_lap(
             lap.is_pit,
             lap.stint_number,
             lap.elapsed_time,
+            lap.ve_level,
+            lap.ve_used,
         ],
     )
     .context("INSERT lap")?;

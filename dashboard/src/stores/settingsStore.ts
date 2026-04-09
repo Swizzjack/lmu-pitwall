@@ -30,6 +30,8 @@ export interface SettingsState {
   standingsShowCompound: boolean
   standingsShowCarType: boolean
   standingsShowVE: boolean
+  // Post Race Results
+  resultsPath: string
 }
 
 interface SettingsStore extends SettingsState {
@@ -70,6 +72,8 @@ export const SETTINGS_DEFAULTS: SettingsState = {
   standingsShowCompound: true,
   standingsShowCarType: true,
   standingsShowVE: true,
+  // Post Race Results
+  resultsPath: '',
 }
 
 export const useSettingsStore = create<SettingsStore>()(
@@ -84,10 +88,10 @@ export const useSettingsStore = create<SettingsStore>()(
       exportSettings: () => {
         const { speedUnit, tempUnit, pressureUnit, fuelUnit, lapReserve, wsHost, wsPort, primaryColor, accentColor, fpsLimit,
           timeWidgetShowComputerTime, timeWidgetClockFormat, timeWidgetShowSessionElapsed, timeWidgetShowTimeRemaining, timeWidgetShowCurrentLap,
-          standingsShowCompound, standingsShowCarType, standingsShowVE } = get()
+          standingsShowCompound, standingsShowCarType, standingsShowVE, resultsPath } = get()
         return JSON.stringify({ speedUnit, tempUnit, pressureUnit, fuelUnit, lapReserve, wsHost, wsPort, primaryColor, accentColor, fpsLimit,
           timeWidgetShowComputerTime, timeWidgetClockFormat, timeWidgetShowSessionElapsed, timeWidgetShowTimeRemaining, timeWidgetShowCurrentLap,
-          standingsShowCompound, standingsShowCarType, standingsShowVE }, null, 2)
+          standingsShowCompound, standingsShowCarType, standingsShowVE, resultsPath }, null, 2)
       },
 
       importSettings: (json) => {
@@ -112,6 +116,7 @@ export const useSettingsStore = create<SettingsStore>()(
           if (typeof data.standingsShowCompound === 'boolean') valid.standingsShowCompound = data.standingsShowCompound
           if (typeof data.standingsShowCarType === 'boolean') valid.standingsShowCarType = data.standingsShowCarType
           if (typeof data.standingsShowVE === 'boolean') valid.standingsShowVE = data.standingsShowVE
+          if (typeof data.resultsPath === 'string') valid.resultsPath = data.resultsPath
           set(valid)
           return true
         } catch {

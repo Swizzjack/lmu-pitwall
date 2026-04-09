@@ -93,6 +93,8 @@ interface PostRaceLapData {
   compound_rr: string | null
   is_pit: boolean
   stint_number: number
+  ve_level: number | null
+  ve_used: number | null
   incidents: PostRaceEvent[]
 }
 
@@ -114,6 +116,10 @@ interface PostRaceStintData {
   tw_rl_end: number | null
   tw_rr_end: number | null
   compound: string | null
+  ve_start: number | null
+  ve_end: number | null
+  ve_consumed: number | null
+  avg_ve_per_lap: number | null
 }
 
 interface PostRaceDriverLapEntry {
@@ -400,6 +406,8 @@ const ServerLapDetail = memo(function ServerLapDetail({
     return best === null || l.lap_time < best ? l.lap_time : best
   }, null as number | null)
 
+  const hasVE = laps.some(l => l.ve_level !== null)
+
   return (
     <div style={{ overflowX: 'auto', background: '#0e0e0e', borderTop: `1px solid ${colors.border}` }}>
       <table style={{ borderCollapse: 'collapse', width: '100%', minWidth: 780 }}>
@@ -413,6 +421,7 @@ const ServerLapDetail = memo(function ServerLapDetail({
             <th style={{ ...thStyle, textAlign: 'right' }}>S3</th>
             <th style={{ ...thStyle, textAlign: 'right' }}>TOP km/h</th>
             <th style={{ ...thStyle, textAlign: 'right' }}>FUEL%</th>
+            {hasVE && <th style={{ ...thStyle, textAlign: 'right', color: '#a855f7' }}>VE%</th>}
             <th style={{ ...thStyle, textAlign: 'center' }}>TIRE WEAR</th>
             <th style={{ ...thStyle, textAlign: 'center' }}>CPND</th>
             <th style={{ ...thStyle, textAlign: 'center' }}>STINT</th>
@@ -432,6 +441,7 @@ const ServerLapDetail = memo(function ServerLapDetail({
             const twrr = lap.tw_rr ?? 1
             const fcompound = parseCompound(lap.compound_fl)
             const fuelPct = lap.fuel_level !== null ? Math.round(lap.fuel_level * 100) : null
+            const vePct = lap.ve_level !== null ? Math.round(lap.ve_level * 100) : null
 
             return (
               <tr key={lap.lap_num} style={{ background: rowBg }}>
@@ -447,6 +457,7 @@ const ServerLapDetail = memo(function ServerLapDetail({
                   {lap.top_speed !== null && lap.top_speed > 0 ? lap.top_speed.toFixed(1) : '–'}
                 </td>
                 <td style={{ ...tdBase }}>{fuelPct !== null ? `${fuelPct}%` : '–'}</td>
+                {hasVE && <td style={{ ...tdBase, color: '#a855f7' }}>{vePct !== null ? `${vePct}%` : '–'}</td>}
                 <td style={{ ...tdBase, textAlign: 'center' }}>
                   <TireWearNumeric tires={[twfl, twfr, twrl, twrr]} />
                 </td>
@@ -810,6 +821,18 @@ function CompareTableStints({
                     </div>
                   )
                 }))}
+                {stints.some(st => st?.ve_start != null) && statRow('VE', stints.map(st => {
+                  if (!st || st.ve_start == null) return '—'
+                  const consumed = st.ve_consumed != null ? `−${(st.ve_consumed * 100).toFixed(1)}%` : ''
+                  return (
+                    <div style={{ color: '#a855f7' }}>
+                      <span>{Math.round((st.ve_start) * 100)}%</span>
+                      <span style={{ color: colors.textMuted }}> → </span>
+                      <span>{Math.round((st.ve_end ?? 0) * 100)}%</span>
+                      {consumed && <div style={{ fontSize: 11, color: '#a855f755' }}>{consumed}</div>}
+                    </div>
+                  )
+                }))}
                 {statRow('TIRES BEG', stints.map(st =>
                   tireGrid(st?.tw_fl_start, st?.tw_fr_start, st?.tw_rl_start, st?.tw_rr_start)
                 ))}
@@ -889,6 +912,27 @@ function CompareCharts({
       data.push(row)
     }
     return data
+  }, [compareDriverIds, compareLaps])
+
+  // ── VE data per driver ──
+  const veData = useMemo(() => {
+    const data: { lap: number; [k: string]: number | null }[] = []
+    const allLapNums = new Set<number>()
+    for (const did of compareDriverIds) {
+      for (const l of (compareLaps.get(did) ?? [])) allLapNums.add(l.lap_num)
+    }
+    let anyVE = false
+    for (const lapNum of [...allLapNums].sort((a, b) => a - b)) {
+      const row: { lap: number; [k: string]: number | null } = { lap: lapNum }
+      for (const did of compareDriverIds) {
+        const l = compareLaps.get(did)?.find(x => x.lap_num === lapNum)
+        const v = l?.ve_level != null ? Math.round(l.ve_level * 100) : null
+        row[`ve_${did}`] = v
+        if (v !== null) anyVE = true
+      }
+      data.push(row)
+    }
+    return anyVE ? data : []
   }, [compareDriverIds, compareLaps])
 
   // Collect pit laps per driver
@@ -1064,6 +1108,56 @@ function CompareCharts({
       {!hasTireData && (
         <div style={{ textAlign: 'center', color: colors.textMuted, fontSize: 12, fontFamily: fonts.body, padding: 8 }}>
           Tire wear chart will load once lap data is available…
+        </div>
+      )}
+
+      {/* Chart 4: Virtual Energy */}
+      {veData.length > 0 && (
+        <div style={chartStyle}>
+          {chartTitle('VIRTUAL ENERGY PROGRESSION')}
+          <ResponsiveContainer width="100%" height={200}>
+            <LineChart data={veData} margin={{ top: 4, right: 16, left: 0, bottom: 0 }}>
+              <CartesianGrid {...gridProps} />
+              <XAxis dataKey="lap" {...axisProps} label={{ value: 'Lap', position: 'insideBottomRight', fill: '#555', fontSize: 10 }} />
+              <YAxis domain={[0, 100]} tickFormatter={v => `${v}%`} {...axisProps} width={44} />
+              <Tooltip
+                formatter={(v: unknown, name: unknown) => {
+                  const pct = typeof v === 'number' ? v : Number(v)
+                  const nameStr = typeof name === 'string' ? name : String(name ?? '')
+                  const did = Number(nameStr.replace(/^ve_/, ''))
+                  const dName = compareDriverInfo.get(did)?.name ?? `#${did}`
+                  return [`${pct}%`, dName]
+                }}
+                contentStyle={{ background: '#1a1a1a', border: `1px solid ${colors.border}`, borderRadius: 4, fontSize: 12 }}
+                labelFormatter={l => `Lap ${l}`}
+              />
+              {pitLaps.map(({ lap, did }) => (
+                <ReferenceLine key={`pit_ve_${lap}_${did}`} x={lap} stroke={driverColor(compareDriverIds.indexOf(did))} strokeDasharray="2 6" strokeOpacity={0.3} />
+              ))}
+              {compareDriverIds.map((did, i) => (
+                <Line
+                  key={did}
+                  dataKey={`ve_${did}`}
+                  stroke='#a855f7'
+                  strokeOpacity={0.6 + i * 0.15}
+                  strokeDasharray={i === 0 ? undefined : `${4 + i * 2} ${2 + i}`}
+                  dot={false}
+                  strokeWidth={2}
+                  connectNulls={false}
+                  activeDot={{ r: 4 }}
+                  name={`ve_${did}`}
+                />
+              ))}
+            </LineChart>
+          </ResponsiveContainer>
+          <div style={{ display: 'flex', gap: 16, justifyContent: 'center', marginTop: 4, flexWrap: 'wrap' }}>
+            {compareDriverIds.map(did => {
+              const name = compareDriverInfo.get(did)?.name ?? `#${did}`
+              return (
+                <span key={did} style={{ fontSize: 12, color: '#a855f7', fontWeight: 700 }}>{name}</span>
+              )
+            })}
+          </div>
         </div>
       )}
     </div>
@@ -1302,6 +1396,26 @@ function StintSummaryView({
                   {stint.fuel_consumed !== null && stint.fuel_consumed > 0 && (
                     <div style={{ fontSize: 12, color: colors.textMuted }}>
                       −{Math.round(stint.fuel_consumed * 100)}%
+                    </div>
+                  )}
+                </div>
+              )}
+              {stint.ve_start !== null && (
+                <div>
+                  <div style={{ fontSize: 11, color: '#a855f7', letterSpacing: 0.8, fontWeight: 700 }}>VE</div>
+                  <div style={{ fontSize: 14, fontFamily: fonts.mono, color: '#a855f7', marginTop: 2 }}>
+                    {Math.round((stint.ve_start ?? 0) * 100)}%
+                    <span style={{ color: colors.textMuted }}> → </span>
+                    {Math.round((stint.ve_end ?? 0) * 100)}%
+                  </div>
+                  {stint.ve_consumed !== null && stint.ve_consumed > 0 && (
+                    <div style={{ fontSize: 12, color: '#a855f755' }}>
+                      −{(stint.ve_consumed * 100).toFixed(1)}%
+                      {stint.avg_ve_per_lap !== null && (
+                        <span style={{ marginLeft: 6 }}>
+                          ({(stint.avg_ve_per_lap * 100).toFixed(2)}%/lap)
+                        </span>
+                      )}
                     </div>
                   )}
                 </div>
@@ -2297,7 +2411,8 @@ export default function PostRaceResults({ onClose }: { onClose: () => void }) {
     ws.binaryType = 'arraybuffer'
 
     ws.onopen = () => {
-      ws.send(JSON.stringify({ command: 'post_race_init' }))
+      const { resultsPath } = useSettingsStore.getState()
+      ws.send(JSON.stringify({ command: 'post_race_init', results_path: resultsPath || null }))
     }
 
     ws.onmessage = (event) => {
@@ -2644,7 +2759,10 @@ export default function PostRaceResults({ onClose }: { onClose: () => void }) {
             <button onClick={backToBrowser} style={{ ...btnStyle, color: colors.textMuted }}>← Sessions</button>
             <span style={{ color: colors.border }}>/</span>
             {view === 'driver_detail'
-              ? <button onClick={backToDetail} style={{ ...btnStyle, color: colors.textMuted }}>{selectedSession.track_venue ?? '—'}</button>
+              ? <>
+                  <button onClick={backToDetail} style={{ ...btnStyle, color: colors.textMuted }}>{selectedSession.track_venue ?? '—'}</button>
+                  <span style={{ color: colors.border }}>/</span>
+                </>
               : <span style={{ fontSize: 15, color: colors.text, fontFamily: fonts.body }}>{selectedSession.track_venue ?? '—'}</span>
             }
             <SessionTypeBadge type={detailSessionType} />
@@ -2687,7 +2805,7 @@ export default function PostRaceResults({ onClose }: { onClose: () => void }) {
               )}
             </span>
             <button
-              onClick={() => sendCmd({ command: 'post_race_init' })}
+              onClick={() => sendCmd({ command: 'post_race_init', results_path: useSettingsStore.getState().resultsPath || null })}
               style={{ ...btnStyle, fontSize: 13, color: colors.textMuted }}
               title="Import new results"
             >
@@ -2938,7 +3056,7 @@ export default function PostRaceResults({ onClose }: { onClose: () => void }) {
             onClick={() => {
               setError(null)
               goTo('loading')
-              sendCmd({ command: 'post_race_init' })
+              sendCmd({ command: 'post_race_init', results_path: useSettingsStore.getState().resultsPath || null })
             }}
             style={{ marginTop: 8, ...btnStyle, fontSize: 13, padding: '6px 16px', color: colors.primary }}
           >

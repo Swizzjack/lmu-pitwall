@@ -25,7 +25,7 @@ use super::database::get_db;
 /// context directly, as rusqlite is blocking.
 pub fn handle_command(cmd: ClientCommand) -> ServerMessage {
     match cmd {
-        ClientCommand::PostRaceInit => post_race_init(),
+        ClientCommand::PostRaceInit { results_path } => post_race_init(results_path.as_deref()),
         ClientCommand::PostRaceSessionDetail { session_id } => post_race_session_detail(session_id),
         ClientCommand::PostRaceDriverLaps { driver_id } => post_race_driver_laps(driver_id),
         ClientCommand::PostRaceCompare { driver_ids } => post_race_compare(driver_ids),
@@ -48,13 +48,17 @@ fn db_error(msg: impl std::fmt::Display) -> ServerMessage {
 // 1. post_race_init
 // ---------------------------------------------------------------------------
 
-fn post_race_init() -> ServerMessage {
+fn post_race_init(results_path: Option<&str>) -> ServerMessage {
     let db = match get_db() {
         Ok(db) => db,
         Err(e) => return db_error(format!("DB init failed: {e}")),
     };
 
-    let import_result = match db.ensure_initialized() {
+    let custom_path = results_path
+        .filter(|s| !s.trim().is_empty())
+        .map(std::path::Path::new);
+
+    let import_result = match db.ensure_initialized(custom_path) {
         Ok(r) => r,
         Err(e) => return db_error(format!("Import failed: {e}")),
     };
@@ -142,36 +146,52 @@ fn query_session_detail(
     // Fetch driver base data.
     let mut stmt = conn.prepare(
         "SELECT id, name, car_type, car_class, car_number, team_name, is_player,
-                position, class_position, best_lap_time, total_laps, pitstops, finish_status
+                position, class_position, best_lap_time, total_laps, pitstops, finish_status,
+                finish_time
          FROM drivers
          WHERE session_id = ?1
          ORDER BY position",
     )?;
 
-    let mut drivers: Vec<PostRaceDriverSummary> = stmt
+    struct DriverRow {
+        summary: PostRaceDriverSummary,
+        finish_time: Option<f64>,
+    }
+
+    let driver_rows: Vec<DriverRow> = stmt
         .query_map(rusqlite::params![session_id], |row| {
-            Ok(PostRaceDriverSummary {
-                id: row.get(0)?,
-                name: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
-                car_type: row.get(2)?,
-                car_class: row.get(3)?,
-                car_number: row.get(4)?,
-                team_name: row.get(5)?,
-                is_player: row.get::<_, bool>(6)?,
-                position: row.get(7)?,
-                class_position: row.get(8)?,
-                best_lap_time: row.get(9)?,
-                total_laps: row.get(10)?,
-                pitstops: row.get(11)?,
-                finish_status: row.get(12)?,
-                gap_to_leader: None,
-                laps_behind: None,
+            Ok(DriverRow {
+                summary: PostRaceDriverSummary {
+                    id: row.get(0)?,
+                    name: row.get::<_, Option<String>>(1)?.unwrap_or_default(),
+                    car_type: row.get(2)?,
+                    car_class: row.get(3)?,
+                    car_number: row.get(4)?,
+                    team_name: row.get(5)?,
+                    is_player: row.get::<_, bool>(6)?,
+                    position: row.get(7)?,
+                    class_position: row.get(8)?,
+                    best_lap_time: row.get(9)?,
+                    total_laps: row.get(10)?,
+                    pitstops: row.get(11)?,
+                    finish_status: row.get(12)?,
+                    gap_to_leader: None,
+                    laps_behind: None,
+                },
+                finish_time: row.get(13)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
+    let mut drivers: Vec<PostRaceDriverSummary> = driver_rows.iter().map(|r| r.summary.clone()).collect();
+
     if is_race {
-        compute_race_gaps(conn, session_id, &mut drivers)?;
+        // Build finish_time map: driver_id → finish_time
+        let finish_times: std::collections::HashMap<i64, f64> = driver_rows
+            .iter()
+            .filter_map(|r| r.finish_time.map(|ft| (r.summary.id, ft)))
+            .collect();
+        compute_race_gaps(conn, session_id, &mut drivers, &finish_times)?;
     } else {
         compute_quali_gaps(&mut drivers);
     }
@@ -203,15 +223,46 @@ fn compute_quali_gaps(drivers: &mut Vec<PostRaceDriverSummary>) {
     }
 }
 
-/// Race gap: elapsed_time at the driver's last valid lap compared to the leader
-/// at that same lap number. Drivers that are laps down get `laps_behind` set.
+/// Race gap: uses finish_time when available; falls back to elapsed_time-based logic.
+/// Drivers that are laps down get `laps_behind` set instead of a time gap.
 fn compute_race_gaps(
     conn: &Connection,
     session_id: i64,
     drivers: &mut Vec<PostRaceDriverSummary>,
+    finish_times: &std::collections::HashMap<i64, f64>,
 ) -> Result<()> {
-    // Build driver_id → (last_valid_lap_num, elapsed_time) map.
-    // "Last valid lap" = highest lap_num where elapsed_time IS NOT NULL.
+    let leader_id = match drivers.iter().find(|d| d.position == Some(1)) {
+        Some(l) => l.id,
+        None => return Ok(()),
+    };
+
+    // --- finish_time path ---
+    if let Some(&leader_ft) = finish_times.get(&leader_id) {
+        let leader_laps = drivers
+            .iter()
+            .find(|d| d.id == leader_id)
+            .and_then(|d| d.total_laps);
+
+        for driver in drivers.iter_mut() {
+            if driver.position == Some(1) {
+                continue;
+            }
+            let laps_diff = match (leader_laps, driver.total_laps) {
+                (Some(ll), Some(dl)) if ll > dl => Some((ll as i64 - dl as i64) as i32),
+                _ => None,
+            };
+            if let Some(diff) = laps_diff {
+                driver.laps_behind = Some(diff);
+                // No time gap for lap-down drivers.
+            } else if let Some(&driver_ft) = finish_times.get(&driver.id) {
+                driver.gap_to_leader = Some(driver_ft - leader_ft);
+            }
+            // If finish_time missing for this specific driver, gap stays None.
+        }
+        return Ok(());
+    }
+
+    // --- Fallback: elapsed_time-based logic ---
     let mut et_stmt = conn.prepare(
         "SELECT l.driver_id, l.lap_num, l.elapsed_time
          FROM laps l
@@ -236,18 +287,11 @@ fn compute_race_gaps(
         .map(|(did, lap, et)| (did, (lap, et)))
         .collect();
 
-    // Identify the leader.
-    let leader_id = match drivers.iter().find(|d| d.position == Some(1)) {
-        Some(l) => l.id,
-        None => return Ok(()),
-    };
     let (leader_last_lap, leader_et_final) = match et_map.get(&leader_id) {
         Some(&v) => v,
         None => return Ok(()),
     };
 
-    // Fetch the leader's elapsed_time at every lap number so we can compare
-    // lap-down drivers at their own last lap.
     let mut leader_et_by_lap: std::collections::HashMap<u32, f64> = std::collections::HashMap::new();
     {
         let mut lap_stmt = conn.prepare(
@@ -276,13 +320,11 @@ fn compute_race_gaps(
         let laps_diff = leader_last_lap as i64 - driver_last_lap as i64;
         if laps_diff > 0 {
             driver.laps_behind = Some(laps_diff as i32);
-            // Time gap at the driver's own last lap (for reference, optional)
             if let Some(&leader_et_at_lap) = leader_et_by_lap.get(&driver_last_lap) {
                 let gap = driver_et - leader_et_at_lap;
                 driver.gap_to_leader = Some(gap.abs());
             }
         } else {
-            // Same lap count — straight elapsed_time difference.
             let gap = driver_et - leader_et_final;
             driver.gap_to_leader = Some(gap.abs());
         }
@@ -319,7 +361,8 @@ fn query_driver_laps(conn: &Connection, driver_id: i64) -> Result<Vec<PostRaceLa
                 fuel_level, fuel_used,
                 tw_fl, tw_fr, tw_rl, tw_rr,
                 compound_fl, compound_fr, compound_rl, compound_rr,
-                is_pit, stint_number, elapsed_time
+                is_pit, stint_number, elapsed_time,
+                ve_level, ve_used
          FROM laps
          WHERE driver_id = ?1
          ORDER BY lap_num",
@@ -348,6 +391,8 @@ fn query_driver_laps(conn: &Connection, driver_id: i64) -> Result<Vec<PostRaceLa
                     compound_rr: row.get(16)?,
                     is_pit: row.get::<_, bool>(17)?,
                     stint_number: row.get::<_, u32>(18)?,
+                    ve_level: row.get(20)?,
+                    ve_used: row.get(21)?,
                     incidents: vec![],
                 },
                 elapsed_time: row.get(19)?,
@@ -535,12 +580,15 @@ struct RawLapRow {
     tw_rl: Option<f64>,
     tw_rr: Option<f64>,
     compound_fl: Option<String>,
+    ve_level: Option<f64>,
+    ve_used: Option<f64>,
 }
 
 fn query_stint_summary(conn: &Connection, driver_id: i64) -> Result<Vec<PostRaceStintData>> {
     let mut stmt = conn.prepare(
         "SELECT stint_number, lap_time, fuel_level,
-                tw_fl, tw_fr, tw_rl, tw_rr, compound_fl
+                tw_fl, tw_fr, tw_rl, tw_rr, compound_fl,
+                ve_level, ve_used
          FROM laps
          WHERE driver_id = ?1
          ORDER BY stint_number, lap_num",
@@ -557,6 +605,8 @@ fn query_stint_summary(conn: &Connection, driver_id: i64) -> Result<Vec<PostRace
                 tw_rl: row.get(5)?,
                 tw_rr: row.get(6)?,
                 compound_fl: row.get(7)?,
+                ve_level: row.get(8)?,
+                ve_used: row.get(9)?,
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -591,6 +641,19 @@ fn query_stint_summary(conn: &Connection, driver_id: i64) -> Result<Vec<PostRace
             _ => None,
         };
 
+        // VE aggregation — only meaningful when at least one lap has ve_used data.
+        let ve_used_laps: Vec<f64> = group.iter().filter_map(|r| r.ve_used).collect();
+        let (ve_consumed, avg_ve_per_lap) = if ve_used_laps.is_empty() {
+            (None, None)
+        } else {
+            let total: f64 = ve_used_laps.iter().sum();
+            let avg = total / ve_used_laps.len() as f64;
+            (Some(total), Some(avg))
+        };
+        // ve_start / ve_end: first and last lap that have a non-None ve_level.
+        let ve_start = group.iter().find_map(|r| r.ve_level);
+        let ve_end = group.iter().rev().find_map(|r| r.ve_level);
+
         stints.push(PostRaceStintData {
             stint_number: stint_num,
             lap_count: group.len(),
@@ -609,6 +672,10 @@ fn query_stint_summary(conn: &Connection, driver_id: i64) -> Result<Vec<PostRace
             tw_rl_end: last.tw_rl,
             tw_rr_end: last.tw_rr,
             compound: first.compound_fl.clone(),
+            ve_start,
+            ve_end,
+            ve_consumed,
+            avg_ve_per_lap,
         });
 
         i = j;

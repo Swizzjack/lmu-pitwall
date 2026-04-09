@@ -345,6 +345,10 @@ pub struct PostRaceLapData {
     pub compound_rr: Option<String>,
     pub is_pit: bool,
     pub stint_number: u32,
+    /// Virtual Energy level at end of lap (0.0–1.0). None for classes without VE.
+    pub ve_level: Option<f64>,
+    /// Virtual Energy consumed this lap. None for classes without VE.
+    pub ve_used: Option<f64>,
     /// Incidents that occurred during this lap (mapped by elapsed_time range).
     pub incidents: Vec<PostRaceEvent>,
 }
@@ -385,6 +389,14 @@ pub struct PostRaceStintData {
     pub tw_rl_end: Option<f64>,
     pub tw_rr_end: Option<f64>,
     pub compound: Option<String>,
+    /// VE level at start of stint (first lap). None for classes without VE.
+    pub ve_start: Option<f64>,
+    /// VE level at end of stint (last lap). None for classes without VE.
+    pub ve_end: Option<f64>,
+    /// Total VE consumed during stint (sum of ve_used). None for classes without VE.
+    pub ve_consumed: Option<f64>,
+    /// Average VE consumed per lap. None for classes without VE.
+    pub avg_ve_per_lap: Option<f64>,
 }
 
 /// A single incident, penalty, track-limit warning, or damage report.
@@ -435,7 +447,8 @@ pub struct PostRaceDriverEventSummary {
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum ClientCommand {
     /// Trigger lazy DB init + delta import; respond with full session list.
-    PostRaceInit,
+    /// `results_path`: optional override for the LMU results folder (empty = use default).
+    PostRaceInit { results_path: Option<String> },
     /// Fetch all drivers for a session (no lap detail).
     PostRaceSessionDetail { session_id: i64 },
     /// Fetch all laps for a single driver.

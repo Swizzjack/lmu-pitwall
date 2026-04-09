@@ -316,6 +316,24 @@ export default function Settings({ open, onClose }: Props) {
             </Row>
           </Section>
 
+          {/* Post Race Results */}
+          <Section title="Post Race Results">
+            <Row label="Results Folder">
+              <input
+                type="text"
+                value={s.resultsPath}
+                placeholder="Default (Steam install)"
+                onChange={(e) => s.update({ resultsPath: e.target.value })}
+                style={{ ...inputStyle, width: 280, fontSize: 13 }}
+                title="Leave empty to use the default LMU Steam path"
+              />
+            </Row>
+            <p style={{ fontFamily: fonts.body, fontSize: 14, color: colors.textMuted, margin: 0, lineHeight: 1.5 }}>
+              Custom path to your LMU results folder.<br />
+              Example: <span style={{ fontFamily: fonts.mono }}>D:\LMU\UserData\Log\Results</span>
+            </p>
+          </Section>
+
           {/* Track Maps */}
           <Section title="Track Maps">
             {savedTracks.length === 0 ? (

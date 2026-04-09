@@ -46,7 +46,8 @@ CREATE TABLE IF NOT EXISTS drivers (
     best_lap_time   REAL,
     total_laps      INTEGER,
     pitstops        INTEGER,
-    finish_status   TEXT
+    finish_status   TEXT,
+    finish_time     REAL
 );
 
 CREATE TABLE IF NOT EXISTS laps (
@@ -72,7 +73,9 @@ CREATE TABLE IF NOT EXISTS laps (
     compound_rr     TEXT,
     is_pit          BOOLEAN NOT NULL DEFAULT 0,
     stint_number    INTEGER,
-    elapsed_time    REAL
+    elapsed_time    REAL,
+    ve_level        REAL,
+    ve_used         REAL
 );
 
 CREATE INDEX IF NOT EXISTS idx_laps_driver_id    ON laps(driver_id);
@@ -121,12 +124,11 @@ impl PostRaceDb {
             .with_context(|| format!("Failed to open database at {}", db_path.display()))?;
         conn.execute_batch(SCHEMA)
             .context("Failed to apply database schema")?;
-        // Migration: add elapsed_time column to existing databases.
-        conn.execute(
-            "ALTER TABLE laps ADD COLUMN elapsed_time REAL",
-            [],
-        )
-        .ok(); // silently ignored if column already exists
+        // Migrations: add columns to existing databases (silently ignored if already present).
+        conn.execute("ALTER TABLE laps ADD COLUMN elapsed_time REAL", []).ok();
+        conn.execute("ALTER TABLE laps ADD COLUMN ve_level REAL", []).ok();
+        conn.execute("ALTER TABLE laps ADD COLUMN ve_used REAL", []).ok();
+        conn.execute("ALTER TABLE drivers ADD COLUMN finish_time REAL", []).ok();
         Ok(Self {
             conn: Mutex::new(conn),
         })
@@ -142,9 +144,12 @@ impl PostRaceDb {
     ///
     /// Returns a summary of what was imported. Logs errors per file rather than
     /// failing the whole call — a missing results folder is silently ignored.
-    pub fn ensure_initialized(&self) -> Result<super::importer::ImportResult> {
+    pub fn ensure_initialized(&self, custom_path: Option<&std::path::Path>) -> Result<super::importer::ImportResult> {
         let mut conn = self.lock();
-        let folder = default_results_folder().unwrap_or_default();
+        let folder = custom_path
+            .map(|p| p.to_path_buf())
+            .or_else(default_results_folder)
+            .unwrap_or_default();
         let result = import_new_sessions(&mut *conn, &folder)?;
         if result.new_imported > 0 || !result.errors.is_empty() {
             tracing::info!(

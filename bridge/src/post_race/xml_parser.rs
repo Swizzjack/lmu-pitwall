@@ -42,6 +42,10 @@ pub struct ParsedLap {
     pub stint_number: u32,
     /// Elapsed session time in seconds when this lap was completed (`et` attribute).
     pub elapsed_time: Option<f64>,
+    /// Virtual Energy level at end of lap (0.0–1.0). None for classes without VE.
+    pub ve_level: Option<f64>,
+    /// Virtual Energy consumed this lap. None for classes without VE.
+    pub ve_used: Option<f64>,
 }
 
 #[derive(Debug, Clone, Default)]
@@ -58,6 +62,7 @@ pub struct ParsedDriver {
     pub total_laps: Option<u32>,
     pub pitstops: Option<u32>,
     pub finish_status: Option<String>,
+    pub finish_time: Option<f64>,
     pub laps: Vec<ParsedLap>,
 }
 
@@ -398,6 +403,8 @@ pub fn parse_result_xml(path: &Path) -> Result<Vec<ParsedSession>> {
                         .map(|v| v.trim() == "1")
                         .unwrap_or(false);
                     let elapsed_time = attr_f64(&attrs, b"et");
+                    let ve_level = attr_f64(&attrs, b"ve");
+                    let ve_used = attr_f64(&attrs, b"veUsed");
 
                     current_lap = Some(ParsedLap {
                         lap_num: num,
@@ -420,6 +427,8 @@ pub fn parse_result_xml(path: &Path) -> Result<Vec<ParsedSession>> {
                         is_pit,
                         stint_number: current_stint,
                         elapsed_time,
+                        ve_level,
+                        ve_used,
                     });
                     collecting_tag = Some("Lap".to_string());
                 } else if tag == "Stream" && current_session.is_some() {
@@ -476,6 +485,8 @@ pub fn parse_result_xml(path: &Path) -> Result<Vec<ParsedSession>> {
                         .map(|v| v.trim() == "1")
                         .unwrap_or(false);
                     let elapsed_time = attr_f64(&attrs, b"et");
+                    let ve_level = attr_f64(&attrs, b"ve");
+                    let ve_used = attr_f64(&attrs, b"veUsed");
 
                     let lap = ParsedLap {
                         lap_num: num,
@@ -498,6 +509,8 @@ pub fn parse_result_xml(path: &Path) -> Result<Vec<ParsedSession>> {
                         is_pit,
                         stint_number: current_stint,
                         elapsed_time,
+                        ve_level,
+                        ve_used,
                     };
                     if is_pit {
                         current_stint += 1;
@@ -544,6 +557,7 @@ pub fn parse_result_xml(path: &Path) -> Result<Vec<ParsedSession>> {
                             "Laps" => d.total_laps = text.parse().ok(),
                             "Pitstops" => d.pitstops = text.parse().ok(),
                             "FinishStatus" => d.finish_status = Some(text),
+                            "FinishTime" => d.finish_time = text.trim().parse().ok(),
                             _ => {}
                         }
                         continue;
