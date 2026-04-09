@@ -12,7 +12,8 @@ use tokio_tungstenite::tungstenite::handshake::server::{Request, Response};
 use tokio_tungstenite::tungstenite::Message;
 use tracing::{debug, info, warn};
 
-use crate::post_race::api::handle_command;
+use crate::fuel_calculator::api::handle_command as fuel_handle;
+use crate::post_race::api::handle_command as post_race_handle;
 use crate::protocol::messages::{ClientCommand, ServerMessage};
 
 /// Broadcast channel capacity — number of queued messages per slow client
@@ -198,7 +199,7 @@ async fn handle_client(
                         match serde_json::from_str::<ClientCommand>(&text) {
                             Ok(cmd) => {
                                 let response = tokio::task::spawn_blocking(move || {
-                                    handle_command(cmd)
+                                    dispatch_command(cmd)
                                 })
                                 .await;
                                 match response {
@@ -249,6 +250,24 @@ async fn handle_client(
     let new_count = prev.saturating_sub(1);
     let _ = count_tx.send(new_count);
     info!("Client {} disconnected ({} remaining)", peer, new_count);
+}
+
+// ---------------------------------------------------------------------------
+// Command dispatcher
+// ---------------------------------------------------------------------------
+
+/// Route an incoming [`ClientCommand`] to the appropriate module handler.
+///
+/// Fuel-calculator commands go to `fuel_calculator::api`, all others to
+/// `post_race::api`. Both handlers are synchronous and must be called from
+/// `tokio::task::spawn_blocking`.
+fn dispatch_command(cmd: ClientCommand) -> ServerMessage {
+    match cmd {
+        ClientCommand::FuelCalcInit | ClientCommand::FuelCalcCompute { .. } => {
+            fuel_handle(cmd)
+        }
+        _ => post_race_handle(cmd),
+    }
 }
 
 // ---------------------------------------------------------------------------

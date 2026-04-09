@@ -5,6 +5,7 @@ mod assets;
 mod config;
 mod electronics;
 mod fuel;
+mod fuel_calculator;
 mod garage_api;
 mod http_server;
 mod lap_tracker;

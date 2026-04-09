@@ -282,6 +282,22 @@ pub enum ServerMessage {
 
     /// Sent when a post-race command fails (e.g. DB not yet initialized).
     PostRaceError { message: String },
+
+    // -----------------------------------------------------------------------
+    // Fuel Calculator responses
+    // -----------------------------------------------------------------------
+    /// Response to `FuelCalcInit` — available track/car combinations.
+    FuelCalcOptions {
+        options: crate::fuel_calculator::types::FuelCalcOptions,
+    },
+
+    /// Response to `FuelCalcCompute` — full fuel/VE calculation result.
+    FuelCalcResult {
+        result: crate::fuel_calculator::types::FuelCalcResult,
+    },
+
+    /// Sent when a fuel calculator command fails.
+    FuelCalcError { message: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -459,4 +475,24 @@ pub enum ClientCommand {
     PostRaceStintSummary { driver_id: i64 },
     /// Fetch all events (incidents, penalties, …) for a session.
     PostRaceEvents { session_id: i64 },
+
+    // -----------------------------------------------------------------------
+    // Fuel Calculator commands
+    // -----------------------------------------------------------------------
+    /// Request available track/car combinations from the PostRace DB.
+    FuelCalcInit,
+
+    /// Compute fuel/VE requirements for a given track, car, and race distance.
+    FuelCalcCompute {
+        track_venue: String,
+        /// Matches `drivers.car_type` in the DB (e.g. "Porsche 963 LMDh").
+        car_name: String,
+        /// Race distance in laps. Provide this OR `race_minutes`, not both.
+        race_laps: Option<u32>,
+        /// Race distance in minutes. Laps are estimated from historical avg lap time.
+        race_minutes: Option<f64>,
+        /// If false (default), only include data from the current game version.
+        #[serde(default)]
+        include_all_versions: bool,
+    },
 }

@@ -5,12 +5,14 @@ import Toolbar from './components/Toolbar'
 import WidgetGrid from './components/WidgetGrid'
 import Settings from './components/Settings'
 import PostRaceResults from './components/PostRaceResults'
+import FuelCalculator from './components/FuelCalculator'
 import { useSettingsStore } from './stores/settingsStore'
 
 export default function App() {
   useWebSocket()
   const [settingsOpen, setSettingsOpen] = useState(false)
   const [resultsOpen, setResultsOpen] = useState(false)
+  const [fuelOpen, setFuelOpen] = useState(false)
   const updateSettings = useSettingsStore((s) => s.update)
 
   // Restore fullscreen on mount
@@ -56,12 +58,16 @@ export default function App() {
     }}>
       <Toolbar
         onOpenSettings={() => setSettingsOpen(true)}
-        onOpenResults={() => setResultsOpen((v) => !v)}
+        onOpenResults={() => { setFuelOpen(false); setResultsOpen(v => !v) }}
+        onOpenFuel={() => { setResultsOpen(false); setFuelOpen(v => !v) }}
         resultsOpen={resultsOpen}
+        fuelOpen={fuelOpen}
       />
       {resultsOpen
         ? <PostRaceResults onClose={() => setResultsOpen(false)} />
-        : <WidgetGrid />
+        : fuelOpen
+          ? <FuelCalculator onClose={() => setFuelOpen(false)} />
+          : <WidgetGrid />
       }
       <Settings open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </div>

@@ -28,10 +28,12 @@ function ConnectionBadge() {
   )
 }
 
-export default function Toolbar({ onOpenSettings, onOpenResults, resultsOpen }: {
+export default function Toolbar({ onOpenSettings, onOpenResults, onOpenFuel, resultsOpen, fuelOpen }: {
   onOpenSettings: () => void
   onOpenResults: () => void
+  onOpenFuel: () => void
   resultsOpen: boolean
+  fuelOpen: boolean
 }) {
   const { activePreset, locked, setPreset, resetToDefault, toggleLock, addWidget } = useLayoutStore()
   const fullscreen = useSettingsStore((s) => s.fullscreen)
@@ -122,6 +124,9 @@ export default function Toolbar({ onOpenSettings, onOpenResults, resultsOpen }: 
 
       {/* Spacer */}
       <div style={{ flex: 1 }} />
+
+      {/* Fuel Calculator */}
+      <ToolbarBtn onClick={onOpenFuel} title="Fuel Calculator" active={fuelOpen}>⛽</ToolbarBtn>
 
       {/* Post Race Results */}
       <ToolbarBtn onClick={onOpenResults} title="Post Race Results" active={resultsOpen}>📋</ToolbarBtn>

@@ -31,6 +31,10 @@ pub fn handle_command(cmd: ClientCommand) -> ServerMessage {
         ClientCommand::PostRaceCompare { driver_ids } => post_race_compare(driver_ids),
         ClientCommand::PostRaceStintSummary { driver_id } => post_race_stint_summary(driver_id),
         ClientCommand::PostRaceEvents { session_id } => post_race_events(session_id),
+        // Fuel-calculator commands are dispatched in websocket::server before reaching here.
+        _ => ServerMessage::PostRaceError {
+            message: "Command not handled by post_race module".to_string(),
+        },
     }
 }
 
