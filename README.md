@@ -2,7 +2,7 @@
 
 A real-time sim racing dashboard for [Le Mans Ultimate](https://www.lemansultimate.com/), designed to run on a second (or third, or fourth) monitor.
 
-Built with Rust and React. Runs as a single `.exe` — no installation required, no dependencies, no separate server.
+Built with Rust and React. Runs as a single `.exe` — no installation required, no separate server.
 
 ![LMU Pitwall Dashboard](docs/screenshots/screenshot-full.png)
 
@@ -16,6 +16,7 @@ Built with Rust and React. Runs as a single `.exe` — no installation required,
 - **Time** — Current session time, time remaining, and lap counter.
 - **Track Map** — SVG-based live track map with vehicle positions, updated in real-time.
 - **Post Race Results** — Load any LMU session XML log file and view detailed race results: final classification, lap times, sector times, gaps, and pitstops for all drivers.
+- **Fuel Calculator** — Calculate the required fuel or virtual energy consumption based on the sessions already completed.
 - **Drag & Drop Layout** — Arrange and resize widgets however you like. Layout is saved automatically.
 
 ## How It Works
