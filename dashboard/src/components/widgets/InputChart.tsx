@@ -1,5 +1,6 @@
 import { useRef, useEffect, useState } from 'react'
 import { useTelemetryStore } from '../../stores/telemetryStore'
+import { useSettingsStore } from '../../stores/settingsStore'
 import { colors, fonts } from '../../styles/theme'
 
 type Channel = 'THR' | 'BRK' | 'CLT' | 'STEER' | 'GX' | 'GZ' | 'REGEN'
@@ -87,7 +88,8 @@ export default function InputChart() {
   const clutch     = useTelemetryStore((s) => s.telemetry.clutch)
   const steering   = useTelemetryStore((s) => s.telemetry.steering)
   const localAccel = useTelemetryStore((s) => s.telemetry.local_accel)
-  const regenKw    = useTelemetryStore((s) => s.electronics.regen)
+  const regenKw        = useTelemetryStore((s) => s.electronics.regen)
+  const inputChartFps  = useSettingsStore((s) => s.inputChartFps)
 
   // ── track container size via ResizeObserver ───────────────────────────────
   useEffect(() => {
@@ -126,8 +128,13 @@ export default function InputChart() {
   // ── canvas render loop ────────────────────────────────────────────────────
   useEffect(() => {
     const windowMs = SPEED_OPTIONS[speedIdx].seconds * 1000
+    const frameInterval = 1000 / inputChartFps
+    let lastDraw = 0
 
-    function draw() {
+    function draw(now: number) {
+      if (now - lastDraw < frameInterval) { animRef.current = requestAnimationFrame(draw); return }
+      lastDraw = now
+
       const canvas = canvasRef.current
       if (!canvas) { animRef.current = requestAnimationFrame(draw); return }
       const ctx = canvas.getContext('2d')
@@ -155,8 +162,8 @@ export default function InputChart() {
         ctx.stroke()
       }
 
-      const now       = Date.now()
-      const startTime = now - windowMs
+      const ts        = Date.now()
+      const startTime = ts - windowMs
       const buf       = samplesRef.current
       const visible   = buf.filter((s) => s.t >= startTime)
       if (visible.length < 2) { animRef.current = requestAnimationFrame(draw); return }
@@ -185,7 +192,7 @@ export default function InputChart() {
 
     animRef.current = requestAnimationFrame(draw)
     return () => cancelAnimationFrame(animRef.current)
-  }, [active, speedIdx])
+  }, [active, speedIdx, inputChartFps])
 
   function toggleChannel(ch: Channel) {
     setActive((prev) => {

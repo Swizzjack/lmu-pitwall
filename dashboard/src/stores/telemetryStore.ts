@@ -8,6 +8,7 @@ import type {
   ServerMessage,
   ElectronicsUpdate,
   VehicleStatusUpdate,
+  VersionInfo,
 } from '../types/telemetry'
 import type { ConnectionStatus } from '../hooks/useWebSocket'
 
@@ -96,6 +97,8 @@ interface ConnectionSection {
   plugin_version: string
 }
 
+type VersionInfoSection = Omit<VersionInfo, 'type'> | null
+
 // ---------------------------------------------------------------------------
 // Full store shape
 // ---------------------------------------------------------------------------
@@ -108,6 +111,7 @@ interface TelemetryStore {
   vehicleStatus: VehicleStatusSection
   allDrivers: AllDriversSection
   connection: ConnectionSection
+  versionInfo: VersionInfoSection
   lapHistory: LapEntry[]
   _lapTracking: { prevTotalLaps: number; prevPlayerId: number }
 
@@ -262,6 +266,7 @@ export const useTelemetryStore = create<TelemetryStore>((set) => ({
   vehicleStatus: defaultVehicleStatus,
   allDrivers: defaultAllDrivers,
   connection: defaultConnection,
+  versionInfo: null,
   lapHistory: [],
   _lapTracking: { prevTotalLaps: -1, prevPlayerId: -1 },
 
@@ -437,6 +442,17 @@ export const useTelemetryStore = create<TelemetryStore>((set) => ({
             session_time: msg.session_time,
             drivers: msg.drivers,
             lastUpdated: Date.now(),
+          },
+        })
+        break
+
+      case 'VersionInfo':
+        set({
+          versionInfo: {
+            current_version: msg.current_version,
+            latest_version: msg.latest_version,
+            download_url: msg.download_url,
+            update_available: msg.update_available,
           },
         })
         break

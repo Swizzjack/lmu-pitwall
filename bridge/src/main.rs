@@ -853,8 +853,12 @@ async fn main() -> Result<()> {
     let (all_drivers_tx, all_drivers_rx) =
         tokio::sync::watch::channel::<Option<ServerMessage>>(None);
 
+    // Watch channel for VersionInfo (sent to new clients on connect once check completes).
+    let (version_info_tx, version_info_rx) =
+        tokio::sync::watch::channel::<Option<ServerMessage>>(None);
+
     let state = Arc::new(RwLock::new(TelemetryState::new()));
-    let ws    = Arc::new(WebSocketServer::new(config.ws_port, all_drivers_rx));
+    let ws    = Arc::new(WebSocketServer::new(config.ws_port, all_drivers_rx, version_info_rx));
 
     // Task 1 + 3: Shared memory polling + health check
     {
@@ -897,6 +901,45 @@ async fn main() -> Result<()> {
         });
     }
 
+    // GitHub update check — runs once in background, broadcasts VersionInfo.
+    {
+        let ws_broadcaster = ws.broadcaster();
+        tokio::spawn(async move {
+            // Small delay so startup completes before the HTTP call.
+            tokio::time::sleep(Duration::from_secs(3)).await;
+
+            let current = env!("CARGO_PKG_VERSION").to_string();
+            let result = tokio::task::spawn_blocking(|| check_github_version()).await;
+
+            let msg = match result {
+                Ok(Ok((latest, download_url))) => {
+                    let update_available = version_older(&current, &latest);
+                    info!(
+                        "Version check: current={} latest={} update_available={}",
+                        current, latest, update_available
+                    );
+                    ServerMessage::VersionInfo {
+                        current_version: current,
+                        latest_version: latest,
+                        download_url,
+                        update_available,
+                    }
+                }
+                Ok(Err(e)) => {
+                    warn!("GitHub version check failed: {}", e);
+                    return;
+                }
+                Err(e) => {
+                    warn!("GitHub version check task panicked: {}", e);
+                    return;
+                }
+            };
+
+            let _ = version_info_tx.send(Some(msg.clone()));
+            ws_broadcaster.send(std::sync::Arc::new(msg)).ok();
+        });
+    }
+
     // Auto-shutdown when the browser window is closed.
     //
     // Waits for the first client to connect, then watches the client count.
@@ -922,6 +965,30 @@ async fn main() -> Result<()> {
 // ---------------------------------------------------------------------------
 // Auto-shutdown: exit when all browser tabs have been closed
 // ---------------------------------------------------------------------------
+
+/// Fetch the latest release from GitHub and return (version, download_url).
+/// Strips the leading "v" from the tag name if present.
+/// Blocking — must be called via `spawn_blocking`.
+fn check_github_version() -> anyhow::Result<(String, String)> {
+    let response = ureq::get("https://api.github.com/repos/Swizzjack/lmu-pitwall/releases/latest")
+        .set("User-Agent", concat!("lmu-pitwall/", env!("CARGO_PKG_VERSION")))
+        .set("Accept", "application/vnd.github.v3+json")
+        .call()?;
+
+    let json: serde_json::Value = response.into_json()?;
+
+    let tag = json["tag_name"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("missing tag_name in GitHub response"))?;
+    let version = tag.trim_start_matches('v').to_string();
+
+    let download_url = json["html_url"]
+        .as_str()
+        .unwrap_or("https://github.com/Swizzjack/lmu-pitwall/releases/latest")
+        .to_string();
+
+    Ok((version, download_url))
+}
 
 /// Returns `true` if version string `a` is strictly older than `b`.
 /// Compares "MAJOR.MINOR.PATCH" numerically; non-numeric parts are treated as 0.

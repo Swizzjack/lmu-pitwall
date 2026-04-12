@@ -17,12 +17,16 @@ pub fn handle_command(cmd: ClientCommand) -> ServerMessage {
             race_laps,
             race_minutes,
             include_all_versions,
+            fuel_mult,
+            buffer_laps,
         } => fuel_calc_compute(ComputeParams {
             track_venue,
             car_name,
             race_laps,
             race_minutes,
             include_all_versions,
+            fuel_mult,
+            buffer_laps: buffer_laps.unwrap_or(1),
         }),
         _ => ServerMessage::FuelCalcError {
             message: "Unknown fuel calc command".to_string(),

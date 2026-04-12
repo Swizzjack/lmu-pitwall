@@ -6,6 +6,7 @@ export type TempUnit = 'celsius' | 'fahrenheit'
 export type PressureUnit = 'bar' | 'psi'
 export type FuelUnit = 'liters' | 'gallons'
 export type FpsLimit = 0 | 30 | 60
+export type InputChartFps = 60 | 30 | 15
 export type ClockFormat = '12h' | '24h'
 
 export interface SettingsState {
@@ -19,6 +20,7 @@ export interface SettingsState {
   primaryColor: string
   accentColor: string
   fpsLimit: FpsLimit
+  inputChartFps: InputChartFps
   fullscreen: boolean
   // Time Widget
   timeWidgetShowComputerTime: boolean
@@ -61,6 +63,7 @@ export const SETTINGS_DEFAULTS: SettingsState = {
   primaryColor: '#facc15',
   accentColor: '#f97316',
   fpsLimit: 0,
+  inputChartFps: 60,
   fullscreen: false,
   // Time Widget
   timeWidgetShowComputerTime: true,
@@ -86,10 +89,10 @@ export const useSettingsStore = create<SettingsStore>()(
       reset: () => set(SETTINGS_DEFAULTS),
 
       exportSettings: () => {
-        const { speedUnit, tempUnit, pressureUnit, fuelUnit, lapReserve, wsHost, wsPort, primaryColor, accentColor, fpsLimit,
+        const { speedUnit, tempUnit, pressureUnit, fuelUnit, lapReserve, wsHost, wsPort, primaryColor, accentColor, fpsLimit, inputChartFps,
           timeWidgetShowComputerTime, timeWidgetClockFormat, timeWidgetShowSessionElapsed, timeWidgetShowTimeRemaining, timeWidgetShowCurrentLap,
           standingsShowCompound, standingsShowCarType, standingsShowVE, resultsPath } = get()
-        return JSON.stringify({ speedUnit, tempUnit, pressureUnit, fuelUnit, lapReserve, wsHost, wsPort, primaryColor, accentColor, fpsLimit,
+        return JSON.stringify({ speedUnit, tempUnit, pressureUnit, fuelUnit, lapReserve, wsHost, wsPort, primaryColor, accentColor, fpsLimit, inputChartFps,
           timeWidgetShowComputerTime, timeWidgetClockFormat, timeWidgetShowSessionElapsed, timeWidgetShowTimeRemaining, timeWidgetShowCurrentLap,
           standingsShowCompound, standingsShowCarType, standingsShowVE, resultsPath }, null, 2)
       },
@@ -108,6 +111,7 @@ export const useSettingsStore = create<SettingsStore>()(
           if (typeof data.primaryColor === 'string') valid.primaryColor = data.primaryColor
           if (typeof data.accentColor === 'string') valid.accentColor = data.accentColor
           if (data.fpsLimit === 0 || data.fpsLimit === 30 || data.fpsLimit === 60) valid.fpsLimit = data.fpsLimit
+          if (data.inputChartFps === 60 || data.inputChartFps === 30 || data.inputChartFps === 15) valid.inputChartFps = data.inputChartFps
           if (typeof data.timeWidgetShowComputerTime === 'boolean') valid.timeWidgetShowComputerTime = data.timeWidgetShowComputerTime
           if (data.timeWidgetClockFormat === '12h' || data.timeWidgetClockFormat === '24h') valid.timeWidgetClockFormat = data.timeWidgetClockFormat
           if (typeof data.timeWidgetShowSessionElapsed === 'boolean') valid.timeWidgetShowSessionElapsed = data.timeWidgetShowSessionElapsed

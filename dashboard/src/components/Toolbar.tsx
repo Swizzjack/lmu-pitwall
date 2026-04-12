@@ -5,6 +5,36 @@ import { useSettingsStore } from '../stores/settingsStore'
 import { WIDGET_REGISTRY } from './widgetRegistry'
 import { colors, fonts } from '../styles/theme'
 
+function UpdateBadge() {
+  const versionInfo = useTelemetryStore((s) => s.versionInfo)
+  if (!versionInfo?.update_available) return null
+
+  return (
+    <a
+      href={versionInfo.download_url}
+      target="_blank"
+      rel="noreferrer"
+      title={`Update available: v${versionInfo.latest_version}`}
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        gap: 5,
+        padding: '3px 8px',
+        background: `${colors.accent}22`,
+        border: `1px solid ${colors.accent}`,
+        borderRadius: 3,
+        color: colors.accent,
+        fontFamily: fonts.body,
+        fontSize: 14,
+        textDecoration: 'none',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      ↑ v{versionInfo.latest_version}
+    </a>
+  )
+}
+
 function ConnectionBadge() {
   const status = useTelemetryStore((s) => s.connection.status)
   const gameConnected = useTelemetryStore((s) => s.connection.game_connected)
@@ -148,7 +178,7 @@ export default function Toolbar({ onOpenSettings, onOpenResults, onOpenFuel, res
 
       <div style={{ width: 1, height: 27, background: colors.border, margin: '0 2px' }} />
 
-      {/* Version */}
+      {/* Version + update badge */}
       <span style={{
         fontFamily: fonts.body,
         fontSize: 15,
@@ -158,6 +188,7 @@ export default function Toolbar({ onOpenSettings, onOpenResults, onOpenFuel, res
       }}>
         v{__APP_VERSION__}
       </span>
+      <UpdateBadge />
     </div>
   )
 }

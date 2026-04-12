@@ -10,6 +10,8 @@ interface CarOption {
   car_name: string | null
   session_count: number
   total_laps: number
+  fuel_mult_options: number[]
+  default_fuel_mult: number | null
 }
 
 interface TrackOption {
@@ -34,22 +36,30 @@ interface FuelCalcResult {
   confidence: string
   version_filter: string
   fuel_mult: number
-  avg_fuel_per_lap: number
-  fuel_std_dev: number
-  total_fuel_needed: number
-  fuel_capacity: number | null
+  // Race distance
+  avg_lap_time_secs: number | null
+  estimated_laps: number | null
+  race_laps: number
+  buffer_laps: number
+  // Fuel (%)
+  avg_fuel_pct_per_lap: number
+  fuel_std_dev_pct: number
+  total_fuel_needed_pct: number
   fuel_stint_laps: number | null
   fuel_pit_stops: number | null
+  // VE (%)
   has_ve: boolean
-  avg_ve_per_lap: number | null
-  ve_std_dev: number | null
+  avg_ve_pct_per_lap: number | null
+  ve_std_dev_pct: number | null
   ve_stint_laps: number | null
   ve_pit_stops: number | null
+  // Combined
   effective_stint_laps: number | null
   total_pit_stops: number | null
   limiting_factor: string | null
-  recommended_start_fuel: number | null
-  recommended_start_ve: number | null
+  // Recommended (%)
+  recommended_start_fuel_pct: number | null
+  recommended_start_ve_pct: number | null
 }
 
 type FuelCalcMsg =
@@ -70,10 +80,15 @@ function confidenceColor(c: string): string {
   return colors.danger
 }
 
-// Round to given decimal places and format as string.
-function fmt(n: number | null | undefined, dp = 2, suffix = ''): string {
+function fmt(n: number | null | undefined, dp = 1, suffix = ''): string {
   if (n === null || n === undefined) return '–'
   return `${n.toFixed(dp)}${suffix}`
+}
+
+function fmtLapTime(secs: number): string {
+  const m = Math.floor(secs / 60)
+  const s = secs - m * 60
+  return `${m}:${s.toFixed(1).padStart(4, '0')}`
 }
 
 // ── Shared small components ───────────────────────────────────────────────────
@@ -168,6 +183,24 @@ function OverrideBadge() {
   )
 }
 
+function MultBadge({ mult }: { mult: number }) {
+  return (
+    <span style={{
+      fontFamily: fonts.body,
+      fontSize: 10,
+      fontWeight: 700,
+      letterSpacing: 0.5,
+      color: colors.primary,
+      background: colors.primary + '22',
+      border: `1px solid ${colors.primary}`,
+      borderRadius: 3,
+      padding: '0 4px',
+    }}>
+      ×{mult}
+    </span>
+  )
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 export default function FuelCalculator({ onClose }: { onClose: () => void }) {
@@ -183,12 +216,18 @@ export default function FuelCalculator({ onClose }: { onClose: () => void }) {
   // Selection
   const [selectedTrack, setSelectedTrack] = useState('')
   const [selectedCar, setSelectedCar] = useState('')
-  const [distanceMode, setDistanceMode] = useState<'laps' | 'time'>('laps')
+  const [distanceMode, setDistanceMode] = useState<'laps' | 'time'>('time')
   const [distanceValue, setDistanceValue] = useState('')
   const [includeAllVersions, setIncludeAllVersions] = useState(false)
+  const [fuelMultOverride, setFuelMultOverride] = useState<string>('')  // '' = auto
+  const [bufferLaps, setBufferLaps] = useState(1)
+  const [consumptionMult, setConsumptionMult] = useState(1.0)
   const [overridesOpen, setOverridesOpen] = useState(false)
-  const [fuelOverride, setFuelOverride] = useState('')
-  const [veOverride, setVeOverride] = useState('')
+  const [fuelOverride, setFuelOverride] = useState('')   // % per lap
+  const [veOverride, setVeOverride] = useState('')       // % per lap
+
+  // Estimated laps edit (time mode — user can override backend's estimate)
+  const [estimatedLapsEdit, setEstimatedLapsEdit] = useState('')
 
   // Results
   const [result, setResult] = useState<FuelCalcResult | null>(null)
@@ -218,7 +257,10 @@ export default function FuelCalculator({ onClose }: { onClose: () => void }) {
     }
   }, [])
 
-  function handleMsg(msg: FuelCalcMsg) {
+  // Use a ref so the onmessage handler always calls the latest version,
+  // avoiding stale-closure bugs (e.g. initLoading stuck at true).
+  const handleMsgRef = useRef<(msg: FuelCalcMsg) => void>(null!)
+  handleMsgRef.current = function handleMsg(msg: FuelCalcMsg) {
     if (msg.type === 'FuelCalcOptions') {
       setTracks(msg.options.tracks)
       setGameVersions(msg.options.game_versions)
@@ -226,16 +268,19 @@ export default function FuelCalculator({ onClose }: { onClose: () => void }) {
       setInitLoading(false)
     } else if (msg.type === 'FuelCalcResult') {
       setResult(msg.result)
+      setEstimatedLapsEdit('')
       setCalcLoading(false)
       setCalcError(null)
     } else if (msg.type === 'FuelCalcError') {
-      if (initLoading) {
-        setInitError(msg.message)
-        setInitLoading(false)
-      } else {
+      setInitLoading(prev => {
+        if (prev) {
+          setInitError(msg.message)
+          return false
+        }
         setCalcError(msg.message)
         setCalcLoading(false)
-      }
+        return false
+      })
     }
   }
 
@@ -259,7 +304,7 @@ export default function FuelCalculator({ onClose }: { onClose: () => void }) {
         } else {
           msg = JSON.parse(event.data as string) as FuelCalcMsg
         }
-        handleMsg(msg)
+        handleMsgRef.current(msg)
       } catch { /* malformed */ }
     }
 
@@ -269,10 +314,13 @@ export default function FuelCalculator({ onClose }: { onClose: () => void }) {
     }
 
     ws.onclose = () => {
-      if (initLoading) {
-        setInitError('Connection to bridge lost.')
-        setInitLoading(false)
-      }
+      setInitLoading(prev => {
+        if (prev) {
+          setInitError('Connection to bridge lost.')
+          return false
+        }
+        return prev
+      })
     }
 
     return () => {
@@ -288,12 +336,14 @@ export default function FuelCalculator({ onClose }: { onClose: () => void }) {
   function handleTrackChange(venue: string) {
     setSelectedTrack(venue)
     setSelectedCar('')
+    setFuelMultOverride('')
     setResult(null)
     setCalcError(null)
   }
 
   function handleCarChange(carName: string) {
     setSelectedCar(carName)
+    setFuelMultOverride('')
     setResult(null)
     setCalcError(null)
   }
@@ -303,12 +353,19 @@ export default function FuelCalculator({ onClose }: { onClose: () => void }) {
     setCalcLoading(true)
     setCalcError(null)
     setResult(null)
+    setEstimatedLapsEdit('')
 
     const cmd: Record<string, unknown> = {
       command: 'fuel_calc_compute',
       track_venue: selectedTrack,
       car_name: selectedCar,
       include_all_versions: includeAllVersions,
+      buffer_laps: bufferLaps,
+    }
+
+    if (fuelMultOverride !== '') {
+      const fm = parseFloat(fuelMultOverride)
+      if (!isNaN(fm)) cmd.fuel_mult = fm
     }
 
     const distNum = parseFloat(distanceValue)
@@ -321,42 +378,59 @@ export default function FuelCalculator({ onClose }: { onClose: () => void }) {
     sendCmd(cmd)
   }
 
-  // ── Override-applied display values ─────────────────────────────────────────
+  // ── Derived display values (client-side, override-aware) ─────────────────────
 
-  const fuelOvNum = fuelOverride !== '' ? parseFloat(fuelOverride) : null
-  const veOvNum   = veOverride   !== '' ? parseFloat(veOverride) / 100 : null // input: %, stored: fraction
-
+  // Parse overrides — all in % per lap
+  const fuelOvNum  = fuelOverride !== '' ? parseFloat(fuelOverride) : null
+  const veOvNum    = veOverride   !== '' ? parseFloat(veOverride)   : null
   const isOverrideFuel = fuelOvNum !== null && !isNaN(fuelOvNum) && fuelOvNum > 0
   const isOverrideVe   = veOvNum   !== null && !isNaN(veOvNum)   && veOvNum   > 0
 
-  const effectiveFuelPerLap = isOverrideFuel ? fuelOvNum! : (result?.avg_fuel_per_lap ?? 0)
-  const effectiveVePerLap   = isOverrideVe   ? veOvNum!   : (result?.avg_ve_per_lap ?? null)
+  // Effective per-lap consumption (%) — normalize DB values from their recorded fuel_mult
+  // to the user's target consumptionMult: factor = consumptionMult / data_fuel_mult
+  const dataFuelMult = result?.fuel_mult ?? 1.0
+  const normFactor = dataFuelMult > 0 ? consumptionMult / dataFuelMult : consumptionMult
 
-  // Back-compute race laps from result (needed for pit stop re-calc when overriding).
-  const raceLaps = result && result.avg_fuel_per_lap > 0
-    ? Math.ceil(result.total_fuel_needed / result.avg_fuel_per_lap)
+  const effectiveFuelPct = isOverrideFuel
+    ? fuelOvNum!
+    : (result?.avg_fuel_pct_per_lap ?? 0) * normFactor
+  const effectiveVePct = isOverrideVe
+    ? veOvNum!
+    : result?.avg_ve_pct_per_lap != null
+      ? result.avg_ve_pct_per_lap * normFactor
+      : null
+
+  // Effective race laps (may be overridden by user edit in time mode)
+  const estimatedLapsNum = estimatedLapsEdit !== ''
+    ? parseInt(estimatedLapsEdit, 10)
+    : null
+  const effectiveLaps = (estimatedLapsNum !== null && !isNaN(estimatedLapsNum) && estimatedLapsNum > 0)
+    ? estimatedLapsNum
+    : (result?.race_laps ?? 0)
+
+  // Fuel calculations
+  const displayTotalFuelPct = effectiveLaps > 0
+    ? effectiveFuelPct * effectiveLaps
     : null
 
-  const displayTotalFuel = result
-    ? (isOverrideFuel && raceLaps ? effectiveFuelPerLap * raceLaps : result.total_fuel_needed)
-    : null
-
-  const displayFuelStint = result?.fuel_capacity && effectiveFuelPerLap > 0
-    ? Math.floor(result.fuel_capacity / effectiveFuelPerLap)
+  const displayFuelStint = effectiveFuelPct > 0
+    ? Math.floor(100 / effectiveFuelPct)
     : result?.fuel_stint_laps ?? null
 
-  const displayFuelPits = displayFuelStint && raceLaps
-    ? Math.max(0, Math.ceil(raceLaps / displayFuelStint) - 1)
+  const displayFuelPits = displayFuelStint && effectiveLaps
+    ? Math.max(0, Math.ceil(effectiveLaps / displayFuelStint) - 1)
     : result?.fuel_pit_stops ?? null
 
-  const displayVeStint = effectiveVePerLap && effectiveVePerLap > 0
-    ? Math.floor(1.0 / effectiveVePerLap)
+  // VE calculations
+  const displayVeStint = effectiveVePct && effectiveVePct > 0
+    ? Math.floor(100 / effectiveVePct)
     : result?.ve_stint_laps ?? null
 
-  const displayVePits = displayVeStint && raceLaps
-    ? Math.max(0, Math.ceil(raceLaps / displayVeStint) - 1)
+  const displayVePits = displayVeStint && effectiveLaps
+    ? Math.max(0, Math.ceil(effectiveLaps / displayVeStint) - 1)
     : result?.ve_pit_stops ?? null
 
+  // Combined
   const displayEffectiveStint = (displayFuelStint !== null && displayVeStint !== null)
     ? Math.min(displayFuelStint, displayVeStint)
     : displayFuelStint ?? displayVeStint ?? result?.effective_stint_laps ?? null
@@ -365,17 +439,48 @@ export default function FuelCalculator({ onClose }: { onClose: () => void }) {
     ? Math.max(displayFuelPits, displayVePits)
     : displayFuelPits ?? displayVePits ?? result?.total_pit_stops ?? null
 
-  const displayStartFuel = result?.fuel_capacity
-    ? (() => {
-        const firstStint = displayFuelStint && displayFuelPits && displayFuelPits > 0
-          ? displayFuelStint
-          : (raceLaps ?? 0)
-        const needed = effectiveFuelPerLap * firstStint * 1.05
-        return Math.min(needed, result.fuel_capacity!)
-      })()
-    : (displayTotalFuel ? displayTotalFuel * 1.05 : null)
+  // Rolling start surcharge: fuel/VE consumed before the start line in LMU
+  const ROLLING_START_LAPS = 0.5
 
-  // ── Render ──────────────────────────────────────────────────────────────────
+  // Start fuel / VE: (effectiveLaps + bufferLaps + rolling start) × consumption, capped at 100%
+  const displayStartFuelPct = effectiveFuelPct > 0
+    ? Math.min(100, (effectiveLaps + bufferLaps + ROLLING_START_LAPS) * effectiveFuelPct)
+    : result?.recommended_start_fuel_pct != null
+      ? Math.min(100, result.recommended_start_fuel_pct + ROLLING_START_LAPS * (result.avg_fuel_pct_per_lap * normFactor))
+      : null
+
+  const displayStartVePct = effectiveVePct && effectiveVePct > 0
+    ? Math.min(100, (effectiveLaps + bufferLaps + ROLLING_START_LAPS) * effectiveVePct)
+    : result?.recommended_start_ve_pct != null && result.avg_ve_pct_per_lap != null
+      ? Math.min(100, result.recommended_start_ve_pct + ROLLING_START_LAPS * (result.avg_ve_pct_per_lap * normFactor))
+      : null
+
+  // Pit stop refuel / VE amounts
+  // Laps in the final stint = total race laps minus all preceding full stints
+  const remainingLapsAfterLastPit =
+    displayEffectiveStint !== null && displayTotalPits !== null && displayTotalPits > 0
+      ? Math.max(1, effectiveLaps - displayTotalPits * displayEffectiveStint)
+      : null
+  // Regular stops (stints 1..P-1): refuel for a full next stint
+  const pitstopFuelRegular =
+    displayEffectiveStint !== null && effectiveFuelPct > 0 && displayTotalPits !== null && displayTotalPits >= 2
+      ? Math.min(100, displayEffectiveStint * effectiveFuelPct)
+      : null
+  // Last (or only) stop: refuel for remaining laps + buffer
+  const pitstopFuelLast =
+    remainingLapsAfterLastPit !== null && effectiveFuelPct > 0
+      ? Math.min(100, (remainingLapsAfterLastPit + bufferLaps) * effectiveFuelPct)
+      : null
+  const pitstopVeRegular =
+    displayEffectiveStint !== null && effectiveVePct !== null && effectiveVePct > 0 && displayTotalPits !== null && displayTotalPits >= 2
+      ? Math.min(100, displayEffectiveStint * effectiveVePct)
+      : null
+  const pitstopVeLast =
+    remainingLapsAfterLastPit !== null && effectiveVePct !== null && effectiveVePct > 0
+      ? Math.min(100, (remainingLapsAfterLastPit + bufferLaps) * effectiveVePct)
+      : null
+
+  // ── Styles ──────────────────────────────────────────────────────────────────
 
   const inputStyle: React.CSSProperties = {
     background: '#111',
@@ -394,6 +499,27 @@ export default function FuelCalculator({ onClose }: { onClose: () => void }) {
     ...inputStyle,
     cursor: 'pointer',
     fontFamily: fonts.body,
+  }
+
+  // ── FuelMult options for selected car ───────────────────────────────────────
+  const availableFuelMults = selectedCarOption?.fuel_mult_options ?? []
+  const showFuelMultSelector = availableFuelMults.length > 1
+
+  // ── Scale ────────────────────────────────────────────────────────────────────
+  const SCALE_MIN = 0.5
+  const SCALE_MAX = 2.0
+  const SCALE_STEP = 0.1
+  const LS_SCALE_KEY = 'fuel-calc-scale'
+  const [scale, setScaleState] = useState<number>(() => {
+    const v = parseFloat(localStorage.getItem(LS_SCALE_KEY) ?? '1')
+    return isNaN(v) ? 1 : Math.min(SCALE_MAX, Math.max(SCALE_MIN, v))
+  })
+  function adjustScale(delta: number) {
+    setScaleState(prev => {
+      const next = Math.round(Math.min(SCALE_MAX, Math.max(SCALE_MIN, prev + delta)) * 10) / 10
+      localStorage.setItem(LS_SCALE_KEY, String(next))
+      return next
+    })
   }
 
   return (
@@ -448,6 +574,35 @@ export default function FuelCalculator({ onClose }: { onClose: () => void }) {
             DB version: {fmtVersion(currentVersion)}
           </span>
         )}
+
+        {/* Scale controls */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 4, marginLeft: 'auto' }}>
+          <button
+            onClick={() => adjustScale(-SCALE_STEP)}
+            disabled={scale <= SCALE_MIN}
+            title="Kleiner"
+            style={{
+              width: 20, height: 20, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: 'transparent', border: `1px solid ${scale <= SCALE_MIN ? '#333' : colors.border}`,
+              color: scale <= SCALE_MIN ? '#333' : colors.textMuted, cursor: scale <= SCALE_MIN ? 'not-allowed' : 'pointer',
+              borderRadius: 3, fontSize: 14, padding: 0, lineHeight: 1,
+            }}
+          >−</button>
+          <span style={{ fontSize: 13, color: colors.textMuted, minWidth: 34, textAlign: 'center', fontFamily: fonts.mono }}>
+            {scale.toFixed(1)}×
+          </span>
+          <button
+            onClick={() => adjustScale(SCALE_STEP)}
+            disabled={scale >= SCALE_MAX}
+            title="Grösser"
+            style={{
+              width: 20, height: 20, display: 'flex', alignItems: 'center', justifyContent: 'center',
+              background: 'transparent', border: `1px solid ${scale >= SCALE_MAX ? '#333' : colors.border}`,
+              color: scale >= SCALE_MAX ? '#333' : colors.textMuted, cursor: scale >= SCALE_MAX ? 'not-allowed' : 'pointer',
+              borderRadius: 3, fontSize: 14, padding: 0, lineHeight: 1,
+            }}
+          >+</button>
+        </div>
       </div>
 
       {/* Body */}
@@ -460,10 +615,13 @@ export default function FuelCalculator({ onClose }: { onClose: () => void }) {
           {initError}
         </div>
       ) : (
+        <div style={{ flex: 1, overflow: 'hidden', position: 'relative', minHeight: 0 }}>
         <div style={{
+          position: 'absolute', top: 0, left: 0,
+          width: `${100 / scale}%`, height: `${100 / scale}%`,
+          transform: `scale(${scale})`, transformOrigin: 'top left',
           display: 'grid',
           gridTemplateColumns: '320px 1fr',
-          flex: 1,
           overflow: 'hidden',
         }}>
           {/* ── Config Panel ── */}
@@ -517,11 +675,48 @@ export default function FuelCalculator({ onClose }: { onClose: () => void }) {
               )}
             </div>
 
+            {/* FuelMult selector — only shown when multiple values exist */}
+            {showFuelMultSelector && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                <Label>Fuel Multiplier</Label>
+                <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                  <label style={{
+                    display: 'flex', alignItems: 'center', gap: 5,
+                    cursor: 'pointer', fontFamily: fonts.body, fontSize: 13,
+                    color: fuelMultOverride === '' ? colors.text : colors.textMuted,
+                  }}>
+                    <input
+                      type="radio"
+                      checked={fuelMultOverride === ''}
+                      onChange={() => setFuelMultOverride('')}
+                      style={{ accentColor: colors.primary }}
+                    />
+                    Auto ({selectedCarOption?.default_fuel_mult?.toFixed(1)}×)
+                  </label>
+                  {availableFuelMults.map(fm => (
+                    <label key={fm} style={{
+                      display: 'flex', alignItems: 'center', gap: 5,
+                      cursor: 'pointer', fontFamily: fonts.body, fontSize: 13,
+                      color: fuelMultOverride === String(fm) ? colors.text : colors.textMuted,
+                    }}>
+                      <input
+                        type="radio"
+                        checked={fuelMultOverride === String(fm)}
+                        onChange={() => setFuelMultOverride(String(fm))}
+                        style={{ accentColor: colors.primary }}
+                      />
+                      {fm.toFixed(1)}×
+                    </label>
+                  ))}
+                </div>
+              </div>
+            )}
+
             {/* Distance */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
               <Label>Race Distance</Label>
               <div style={{ display: 'flex', gap: 10 }}>
-                {(['laps', 'time'] as const).map(m => (
+                {(['time', 'laps'] as const).map(m => (
                   <label key={m} style={{
                     display: 'flex',
                     alignItems: 'center',
@@ -549,6 +744,56 @@ export default function FuelCalculator({ onClose }: { onClose: () => void }) {
                 onChange={e => setDistanceValue(e.target.value)}
                 style={inputStyle}
               />
+            </div>
+
+            {/* Buffer laps */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <Label>Buffer</Label>
+              <div style={{ display: 'flex', gap: 8 }}>
+                {[0, 1, 2, 3].map(n => (
+                  <label key={n} style={{
+                    display: 'flex', alignItems: 'center', gap: 5,
+                    cursor: 'pointer', fontFamily: fonts.body, fontSize: 13,
+                    color: bufferLaps === n ? colors.text : colors.textMuted,
+                  }}>
+                    <input
+                      type="radio"
+                      checked={bufferLaps === n}
+                      onChange={() => setBufferLaps(n)}
+                      style={{ accentColor: colors.primary }}
+                    />
+                    {n === 0 ? 'None' : `+${n}`}
+                  </label>
+                ))}
+              </div>
+              <span style={{ fontFamily: fonts.body, fontSize: 11, color: colors.textMuted }}>
+                Extra laps of fuel added to start values
+              </span>
+            </div>
+
+            {/* Consumption Multiplier */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <Label>Consumption Multiplier</Label>
+              <div style={{ display: 'flex', gap: 8 }}>
+                {[1.0, 1.5, 2.0].map(m => (
+                  <label key={m} style={{
+                    display: 'flex', alignItems: 'center', gap: 5,
+                    cursor: 'pointer', fontFamily: fonts.body, fontSize: 13,
+                    color: consumptionMult === m ? colors.text : colors.textMuted,
+                  }}>
+                    <input
+                      type="radio"
+                      checked={consumptionMult === m}
+                      onChange={() => setConsumptionMult(m)}
+                      style={{ accentColor: colors.primary }}
+                    />
+                    {m === 1.0 ? '1×' : `${m}×`}
+                  </label>
+                ))}
+              </div>
+              <span style={{ fontFamily: fonts.body, fontSize: 11, color: colors.textMuted }}>
+                Scales fuel &amp; VE consumption from DB
+              </span>
             </div>
 
             {/* Version filter */}
@@ -605,12 +850,12 @@ export default function FuelCalculator({ onClose }: { onClose: () => void }) {
               {overridesOpen && (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 }}>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-                    <Label>Fuel / Lap (L)</Label>
+                    <Label>Fuel / Lap (%)</Label>
                     <input
                       type="number"
-                      step="0.01"
+                      step="0.1"
                       min="0"
-                      placeholder={result ? result.avg_fuel_per_lap.toFixed(2) : 'from DB'}
+                      placeholder={result ? result.avg_fuel_pct_per_lap.toFixed(1) : 'from DB'}
                       value={fuelOverride}
                       onChange={e => setFuelOverride(e.target.value)}
                       style={inputStyle}
@@ -623,7 +868,7 @@ export default function FuelCalculator({ onClose }: { onClose: () => void }) {
                       step="0.1"
                       min="0"
                       max="100"
-                      placeholder={result?.avg_ve_per_lap ? (result.avg_ve_per_lap * 100).toFixed(1) : 'from DB'}
+                      placeholder={result?.avg_ve_pct_per_lap != null ? result.avg_ve_pct_per_lap.toFixed(1) : 'from DB'}
                       value={veOverride}
                       onChange={e => setVeOverride(e.target.value)}
                       style={inputStyle}
@@ -775,27 +1020,87 @@ export default function FuelCalculator({ onClose }: { onClose: () => void }) {
                   )}
                 </Card>
 
+                {/* Race Distance (time mode) */}
+                {result.estimated_laps != null && (
+                  <Card>
+                    <CardTitle>Race Estimate</CardTitle>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+                      {result.avg_lap_time_secs != null && (
+                        <StatRow
+                          label="Avg lap time"
+                          value={fmtLapTime(result.avg_lap_time_secs)}
+                        />
+                      )}
+                      <div style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        padding: '3px 0',
+                      }}>
+                        <span style={{ fontFamily: fonts.body, fontSize: 13, color: colors.textMuted }}>Estimated laps</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                          {estimatedLapsEdit !== '' && <OverrideBadge />}
+                          <input
+                            type="number"
+                            min="1"
+                            value={estimatedLapsEdit !== '' ? estimatedLapsEdit : result.estimated_laps}
+                            onChange={e => setEstimatedLapsEdit(e.target.value)}
+                            style={{
+                              background: '#111',
+                              border: `1px solid ${estimatedLapsEdit !== '' ? colors.accent : colors.border}`,
+                              color: colors.text,
+                              fontFamily: fonts.mono,
+                              fontSize: 14,
+                              padding: '2px 8px',
+                              borderRadius: 4,
+                              outline: 'none',
+                              width: 70,
+                              textAlign: 'right',
+                            }}
+                          />
+                          {estimatedLapsEdit !== '' && (
+                            <button
+                              onClick={() => setEstimatedLapsEdit('')}
+                              style={{
+                                background: 'none',
+                                border: 'none',
+                                color: colors.textMuted,
+                                cursor: 'pointer',
+                                fontFamily: fonts.body,
+                                fontSize: 12,
+                                padding: 0,
+                              }}
+                            >
+                              ✕
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                      <span style={{ fontFamily: fonts.body, fontSize: 11, color: colors.textMuted, marginTop: 2 }}>
+                        Edit to override the estimated lap count
+                      </span>
+                    </div>
+                  </Card>
+                )}
+
                 {/* Fuel */}
                 <Card>
                   <CardTitle>Fuel</CardTitle>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                     <StatRow
                       label="Avg / Lap"
-                      value={fmt(effectiveFuelPerLap) + ' L'}
-                      badge={isOverrideFuel ? <OverrideBadge /> : undefined}
+                      value={fmt(effectiveFuelPct, 1, '%')}
+                      badge={isOverrideFuel ? <OverrideBadge /> : Math.abs(normFactor - 1.0) > 0.001 ? <MultBadge mult={consumptionMult} /> : undefined}
                     />
                     <StatRow
                       label="Std Dev"
-                      value={'±' + fmt(result.fuel_std_dev) + ' L'}
+                      value={'±' + fmt(result.fuel_std_dev_pct, 1, '%')}
                     />
                     <StatRow
                       label="Total needed"
-                      value={fmt(displayTotalFuel) + ' L'}
-                      badge={isOverrideFuel ? <OverrideBadge /> : undefined}
+                      value={fmt(displayTotalFuelPct, 1, '%')}
+                      badge={(isOverrideFuel || estimatedLapsEdit !== '') ? <OverrideBadge /> : undefined}
                     />
-                    {result.fuel_capacity !== null && (
-                      <StatRow label="Tank capacity" value={fmt(result.fuel_capacity) + ' L'} />
-                    )}
                     <StatRow
                       label="Stint length"
                       value={displayFuelStint !== null ? `${displayFuelStint} laps` : '–'}
@@ -804,7 +1109,7 @@ export default function FuelCalculator({ onClose }: { onClose: () => void }) {
                     <StatRow
                       label="Fuel pit stops"
                       value={displayFuelPits !== null ? String(displayFuelPits) : '–'}
-                      badge={isOverrideFuel ? <OverrideBadge /> : undefined}
+                      badge={(isOverrideFuel || estimatedLapsEdit !== '') ? <OverrideBadge /> : undefined}
                     />
                   </div>
                 </Card>
@@ -816,11 +1121,11 @@ export default function FuelCalculator({ onClose }: { onClose: () => void }) {
                     <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
                       <StatRow
                         label="Avg / Lap"
-                        value={effectiveVePerLap !== null ? fmt(effectiveVePerLap * 100, 1) + '%' : '–'}
-                        badge={isOverrideVe ? <OverrideBadge /> : undefined}
+                        value={effectiveVePct !== null ? fmt(effectiveVePct, 1, '%') : '–'}
+                        badge={isOverrideVe ? <OverrideBadge /> : Math.abs(normFactor - 1.0) > 0.001 ? <MultBadge mult={consumptionMult} /> : undefined}
                       />
-                      {result.ve_std_dev !== null && !isOverrideVe && (
-                        <StatRow label="Std Dev" value={'±' + fmt(result.ve_std_dev * 100, 1) + '%'} />
+                      {result.ve_std_dev_pct !== null && !isOverrideVe && (
+                        <StatRow label="Std Dev" value={'±' + fmt(result.ve_std_dev_pct, 1, '%')} />
                       )}
                       <StatRow
                         label="Stint length"
@@ -830,7 +1135,7 @@ export default function FuelCalculator({ onClose }: { onClose: () => void }) {
                       <StatRow
                         label="VE pit stops"
                         value={displayVePits !== null ? String(displayVePits) : '–'}
-                        badge={isOverrideVe ? <OverrideBadge /> : undefined}
+                        badge={(isOverrideVe || estimatedLapsEdit !== '') ? <OverrideBadge /> : undefined}
                       />
                       {result.limiting_factor && (
                         <div style={{ marginTop: 6, display: 'flex', alignItems: 'center', gap: 8 }}>
@@ -865,15 +1170,109 @@ export default function FuelCalculator({ onClose }: { onClose: () => void }) {
                       label="Total pit stops"
                       value={displayTotalPits !== null ? String(displayTotalPits) : '–'}
                     />
-                    <StatRow
-                      label="Start fuel"
-                      value={displayStartFuel !== null ? fmt(displayStartFuel) + ' L' : '–'}
-                      badge={isOverrideFuel ? <OverrideBadge /> : undefined}
-                    />
-                    {result.has_ve && (
-                      <StatRow label="Start VE" value="100%" />
+                  </div>
+
+                  {/* Start Fuel / Start VE — prominent tiles */}
+                  <div style={{ display: 'flex', gap: 10, marginTop: 12 }}>
+                    <div style={{
+                      flex: 1,
+                      background: colors.bg,
+                      border: `1px solid ${colors.primary}55`,
+                      borderRadius: 6,
+                      padding: '10px 14px',
+                      textAlign: 'center',
+                    }}>
+                      <div style={{
+                        fontFamily: fonts.body,
+                        fontSize: 10,
+                        fontWeight: 700,
+                        letterSpacing: 1.5,
+                        color: colors.primary,
+                        textTransform: 'uppercase',
+                        marginBottom: 4,
+                      }}>
+                        Start Fuel
+                      </div>
+                      <div style={{ fontFamily: fonts.mono, fontSize: 24, fontWeight: 700, color: colors.text }}>
+                        {displayStartFuelPct !== null ? fmt(displayStartFuelPct, 1, '%') : '–'}
+                      </div>
+                      {displayStartFuelPct !== null && displayStartFuelPct >= 100 && (
+                        <div style={{ color: colors.danger, fontFamily: fonts.body, fontSize: 10, fontWeight: 700, letterSpacing: 0.5, marginTop: 2 }}>
+                          FULL TANK
+                        </div>
+                      )}
+                    </div>
+                    {(result.has_ve || isOverrideVe) && effectiveVePct !== null && (
+                      <div style={{
+                        flex: 1,
+                        background: colors.bg,
+                        border: `1px solid ${colors.primary}55`,
+                        borderRadius: 6,
+                        padding: '10px 14px',
+                        textAlign: 'center',
+                      }}>
+                        <div style={{
+                          fontFamily: fonts.body,
+                          fontSize: 10,
+                          fontWeight: 700,
+                          letterSpacing: 1.5,
+                          color: colors.primary,
+                          textTransform: 'uppercase',
+                          marginBottom: 4,
+                        }}>
+                          Start VE
+                        </div>
+                        <div style={{ fontFamily: fonts.mono, fontSize: 24, fontWeight: 700, color: colors.text }}>
+                          {displayStartVePct !== null ? fmt(displayStartVePct, 1, '%') : '–'}
+                        </div>
+                      </div>
                     )}
                   </div>
+                  <div style={{ fontFamily: fonts.body, fontSize: 10, color: colors.textMuted, textAlign: 'right', marginTop: 4, letterSpacing: 0.3 }}>
+                    incl. +0.5 laps rolling start
+                  </div>
+
+                  {/* Pit stop refuel section */}
+                  {displayTotalPits !== null && displayTotalPits > 0 && (
+                    <div style={{ marginTop: 12, paddingTop: 12, borderTop: `1px solid ${colors.border}` }}>
+                      <div style={{
+                        fontFamily: fonts.body,
+                        fontSize: 11,
+                        fontWeight: 700,
+                        letterSpacing: 1,
+                        color: colors.textMuted,
+                        textTransform: 'uppercase',
+                        marginBottom: 8,
+                      }}>
+                        Pit Stop Refuel
+                      </div>
+                      {/* Regular stops (1..P-1) — only shown when P ≥ 2 */}
+                      {displayTotalPits >= 2 && (
+                        <StatRow
+                          label={`Fuel — ${displayTotalPits === 2 ? 'stop 1' : `stops 1–${displayTotalPits - 1}`}`}
+                          value={pitstopFuelRegular !== null ? fmt(pitstopFuelRegular, 1, '%') : '–'}
+                        />
+                      )}
+                      {displayTotalPits >= 2 && (result.has_ve || isOverrideVe) && pitstopVeRegular !== null && (
+                        <StatRow
+                          label={`VE — ${displayTotalPits === 2 ? 'stop 1' : `stops 1–${displayTotalPits - 1}`}`}
+                          value={fmt(pitstopVeRegular, 1, '%')}
+                        />
+                      )}
+                      {/* Last (or only) stop */}
+                      <StatRow
+                        label={displayTotalPits === 1 ? 'Fuel — stop 1' : `Fuel — stop ${displayTotalPits}`}
+                        value={pitstopFuelLast !== null ? fmt(pitstopFuelLast, 1, '%') : '–'}
+                      />
+                      {(result.has_ve || isOverrideVe) && pitstopVeLast !== null && (
+                        <StatRow
+                          label={displayTotalPits === 1 ? 'VE — stop 1' : `VE — stop ${displayTotalPits}`}
+                          value={fmt(pitstopVeLast, 1, '%')}
+                        />
+                      )}
+                    </div>
+                  )}
+
                   {displayTotalPits === 0 && (
                     <div style={{
                       marginTop: 10,
@@ -895,6 +1294,7 @@ export default function FuelCalculator({ onClose }: { onClose: () => void }) {
               </>
             )}
           </div>
+        </div>
         </div>
       )}
     </div>

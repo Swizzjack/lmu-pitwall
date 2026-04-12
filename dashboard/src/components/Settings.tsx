@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect } from 'react'
 import { useSettingsStore, SETTINGS_DEFAULTS } from '../stores/settingsStore'
-import type { FpsLimit, SpeedUnit, TempUnit, PressureUnit, FuelUnit, ClockFormat } from '../stores/settingsStore'
+import type { FpsLimit, InputChartFps, SpeedUnit, TempUnit, PressureUnit, FuelUnit, ClockFormat } from '../stores/settingsStore'
 import { colors, fonts } from '../styles/theme'
 
 interface Props {
@@ -248,6 +248,17 @@ export default function Settings({ open, onClose }: Props) {
                   { value: '30', label: '30' },
                 ]}
                 onChange={(v) => s.update({ fpsLimit: Number(v) as FpsLimit })}
+              />
+            </Row>
+            <Row label="Input Chart FPS">
+              <SegmentControl
+                value={String(s.inputChartFps)}
+                options={[
+                  { value: '60', label: '60' },
+                  { value: '30', label: '30' },
+                  { value: '15', label: '15' },
+                ]}
+                onChange={(v) => s.update({ inputChartFps: Number(v) as InputChartFps })}
               />
             </Row>
           </Section>

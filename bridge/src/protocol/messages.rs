@@ -283,6 +283,12 @@ pub enum ServerMessage {
     /// Sent when a post-race command fails (e.g. DB not yet initialized).
     PostRaceError { message: String },
 
+    /// Response to `PostRaceFunFacts` — pre-formatted stat strings + detected player name.
+    PostRaceFunFacts {
+        facts: Vec<String>,
+        player_name: Option<String>,
+    },
+
     // -----------------------------------------------------------------------
     // Fuel Calculator responses
     // -----------------------------------------------------------------------
@@ -298,6 +304,17 @@ pub enum ServerMessage {
 
     /// Sent when a fuel calculator command fails.
     FuelCalcError { message: String },
+
+    // -----------------------------------------------------------------------
+    // Version info
+    // -----------------------------------------------------------------------
+    /// Sent once on client connect (and after background check completes).
+    VersionInfo {
+        current_version: String,
+        latest_version: String,
+        download_url: String,
+        update_available: bool,
+    },
 }
 
 // ---------------------------------------------------------------------------
@@ -475,6 +492,8 @@ pub enum ClientCommand {
     PostRaceStintSummary { driver_id: i64 },
     /// Fetch all events (incidents, penalties, …) for a session.
     PostRaceEvents { session_id: i64 },
+    /// Fetch aggregate stats for the fun-fact ticker.
+    PostRaceFunFacts,
 
     // -----------------------------------------------------------------------
     // Fuel Calculator commands
@@ -494,5 +513,11 @@ pub enum ClientCommand {
         /// If false (default), only include data from the current game version.
         #[serde(default)]
         include_all_versions: bool,
+        /// FuelMult filter override. `None` = auto (most recent session's FuelMult).
+        #[serde(default)]
+        fuel_mult: Option<f64>,
+        /// Extra buffer laps added to recommended start fuel/VE. Default: 1.
+        #[serde(default)]
+        buffer_laps: Option<u32>,
     },
 }

@@ -144,6 +144,7 @@ type PostRaceMsg =
   | { type: 'PostRaceCompare'; reference_driver_id: number; laps: PostRaceComparedLap[] }
   | { type: 'PostRaceEvents'; session_id: number; summary: PostRaceEventsSummary; driver_summaries: PostRaceDriverEventSummary[]; events: PostRaceEvent[] }
   | { type: 'PostRaceError'; message: string }
+  | { type: 'PostRaceFunFacts'; facts: string[]; player_name: string | null }
 
 // ── Pure helpers ───────────────────────────────────────────────────────────────
 
@@ -2388,6 +2389,26 @@ export default function PostRaceResults({ onClose }: { onClose: () => void }) {
     })
   }
 
+  // ── Fun facts ticker ─────────────────────────────────────────────────────────
+
+  const LS_PLAYER_KEY = 'post-race-player-name'
+  const [funFacts, setFunFacts] = useState<string[]>([])
+  const [factIdx, setFactIdx] = useState(0)
+  const [factVisible, setFactVisible] = useState(true)
+
+  useEffect(() => {
+    if (funFacts.length < 2) return
+    let tid: ReturnType<typeof setTimeout>
+    const iv = setInterval(() => {
+      setFactVisible(false)
+      tid = setTimeout(() => {
+        setFactIdx(i => (i + 1) % funFacts.length)
+        setFactVisible(true)
+      }, 450)
+    }, 8000)
+    return () => { clearInterval(iv); clearTimeout(tid) }
+  }, [funFacts])
+
   // ── WebSocket ────────────────────────────────────────────────────────────────
 
   function goTo(v: ViewState) {
@@ -2455,6 +2476,7 @@ export default function PostRaceResults({ onClose }: { onClose: () => void }) {
         setAllSessions(msg.sessions)
         setImportInfo({ total: msg.total_sessions, newImported: msg.new_imported, filesFound: msg.files_found, importErrors: msg.import_errors })
         goTo('browser')
+        sendCmd({ command: 'post_race_fun_facts' })
         break
 
       case 'PostRaceSessionDetail':
@@ -2495,6 +2517,22 @@ export default function PostRaceResults({ onClose }: { onClose: () => void }) {
         setError(msg.message)
         goTo('error')
         break
+
+      case 'PostRaceFunFacts': {
+        if (msg.player_name) {
+          localStorage.setItem(LS_PLAYER_KEY, msg.player_name)
+        }
+        const storedName = msg.player_name ?? localStorage.getItem(LS_PLAYER_KEY)
+        const allFacts = storedName
+          ? [`Racing as: ${storedName}`, ...msg.facts]
+          : msg.facts
+        if (allFacts.length > 0) {
+          setFunFacts(allFacts)
+          setFactIdx(0)
+          setFactVisible(true)
+        }
+        break
+      }
     }
   }
 
@@ -2740,6 +2778,7 @@ export default function PostRaceResults({ onClose }: { onClose: () => void }) {
         borderBottom: `1px solid ${colors.border}`,
         flexShrink: 0,
         flexWrap: 'wrap',
+        position: 'relative',
       }}>
         <span style={{
           fontFamily: fonts.heading,
@@ -2815,6 +2854,47 @@ export default function PostRaceResults({ onClose }: { onClose: () => void }) {
         )}
 
         <div style={{ flex: 1 }} />
+
+        {/* Fun facts ticker — centered absolutely so it doesn't shift the flex layout */}
+        {funFacts.length > 0 && (
+          <div style={{
+            position: 'absolute',
+            left: '50%',
+            top: '50%',
+            transform: 'translate(-50%, -50%)',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 7,
+            pointerEvents: 'none',
+            maxWidth: 420,
+            overflow: 'hidden',
+          }}>
+            <span style={{
+              fontFamily: fonts.heading,
+              fontSize: 12,
+              fontWeight: 700,
+              color: colors.primary,
+              letterSpacing: 1,
+              flexShrink: 0,
+              opacity: 0.85,
+            }}>
+              ◆ FUN FACT
+            </span>
+            <span style={{
+              fontSize: 14,
+              color: colors.text,
+              fontFamily: fonts.body,
+              opacity: factVisible ? 0.9 : 0,
+              transform: factVisible ? 'translateY(0px)' : 'translateY(-5px)',
+              transition: 'opacity 0.45s ease, transform 0.45s ease',
+              whiteSpace: 'nowrap',
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}>
+              {funFacts[factIdx]}
+            </span>
+          </div>
+        )}
 
         {/* Compare mode toggle — shown in browser and detail views */}
         {(view === 'browser' || view === 'detail') && (

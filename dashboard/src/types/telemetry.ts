@@ -219,6 +219,14 @@ export interface ConnectionStatus {
   plugin_version: string
 }
 
+export interface VersionInfo {
+  type: 'VersionInfo'
+  current_version: string
+  latest_version: string
+  download_url: string
+  update_available: boolean
+}
+
 export type ServerMessage =
   | TelemetryUpdate
   | ScoringUpdate
@@ -227,3 +235,4 @@ export type ServerMessage =
   | VehicleStatusUpdate
   | ConnectionStatus
   | AllDriversUpdate
+  | VersionInfo

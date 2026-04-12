@@ -8,7 +8,7 @@ pub struct Config {
     pub ws_port: u16,
 
     /// Telemetry broadcast rate in FPS
-    #[arg(long, default_value_t = 30)]
+    #[arg(long, default_value_t = 20)]
     pub telemetry_fps: u32,
 
     /// Scoring broadcast rate in FPS

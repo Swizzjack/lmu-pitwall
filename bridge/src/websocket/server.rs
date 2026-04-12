@@ -42,10 +42,16 @@ pub struct WebSocketServer {
     count_tx: watch::Sender<usize>,
     /// Latest AllDriversUpdate — sent immediately to newly connecting clients.
     all_drivers_rx: watch::Receiver<Option<ServerMessage>>,
+    /// Latest VersionInfo — sent immediately to newly connecting clients.
+    version_info_rx: watch::Receiver<Option<ServerMessage>>,
 }
 
 impl WebSocketServer {
-    pub fn new(port: u16, all_drivers_rx: watch::Receiver<Option<ServerMessage>>) -> Self {
+    pub fn new(
+        port: u16,
+        all_drivers_rx: watch::Receiver<Option<ServerMessage>>,
+        version_info_rx: watch::Receiver<Option<ServerMessage>>,
+    ) -> Self {
         let (tx, _) = broadcast::channel(BROADCAST_CAPACITY);
         let (count_tx, _) = watch::channel(0usize);
         WebSocketServer {
@@ -54,6 +60,7 @@ impl WebSocketServer {
             client_count: Arc::new(AtomicUsize::new(0)),
             count_tx,
             all_drivers_rx,
+            version_info_rx,
         }
     }
 
@@ -94,6 +101,7 @@ impl WebSocketServer {
             self.client_count.clone(),
             self.count_tx.clone(),
             self.all_drivers_rx.clone(),
+            self.version_info_rx.clone(),
         ));
     }
 }
@@ -109,6 +117,7 @@ async fn handle_client(
     client_count: Arc<AtomicUsize>,
     count_tx: watch::Sender<usize>,
     all_drivers_rx: watch::Receiver<Option<ServerMessage>>,
+    version_info_rx: watch::Receiver<Option<ServerMessage>>,
 ) {
     let is_json = Arc::new(AtomicBool::new(false));
     let is_json_cb = is_json.clone();
@@ -147,6 +156,16 @@ async fn handle_client(
     // frontend doesn't wait until the next car crosses the S/F line.
     {
         let latest = all_drivers_rx.borrow().clone();
+        if let Some(msg) = latest {
+            if let Ok(ws_msg) = serialize(&msg, fmt) {
+                let _ = sink.send(ws_msg).await;
+            }
+        }
+    }
+
+    // Send the latest VersionInfo immediately on connect (if check has completed).
+    {
+        let latest = version_info_rx.borrow().clone();
         if let Some(msg) = latest {
             if let Ok(ws_msg) = serialize(&msg, fmt) {
                 let _ = sink.send(ws_msg).await;
