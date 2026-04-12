@@ -24,7 +24,7 @@ tracing-appender = "0.2"
 anyhow = "1"
 rust-embed = { version = "8" }
 open = "5"
-ureq = { version = "2", default-features = false, features = ["json"] }
+ureq = { version = "2", default-features = false, features = ["json", "tls"] }
 rusqlite = { version = "0.31", features = ["bundled"] }
 quick-xml = { version = "0.37", features = ["encoding"] }
 sha2 = "0.10"
