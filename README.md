@@ -4,7 +4,7 @@ A real-time sim racing dashboard for [Le Mans Ultimate](https://www.lemansultima
 
 Built with Rust and React. Runs as a single `.exe` — no installation required, no separate server.
 
-![LMU Pitwall Dashboard](docs/screenshots/screenshot-full.png)
+![LMU Pitwall Dashboard](docs/screenshots/Full.png)
 
 ## Features
 
