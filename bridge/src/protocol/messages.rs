@@ -1,5 +1,7 @@
 use serde::{Deserialize, Serialize};
 
+fn default_true() -> bool { true }
+
 /// WebSocket message protocol — MessagePack serialized
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -513,6 +515,9 @@ pub enum ClientCommand {
         /// If false (default), only include data from the current game version.
         #[serde(default)]
         include_all_versions: bool,
+        /// If true (default), include Practice sessions in addition to Race sessions.
+        #[serde(default = "default_true")]
+        include_practice: bool,
         /// FuelMult filter override. `None` = auto (most recent session's FuelMult).
         #[serde(default)]
         fuel_mult: Option<f64>,

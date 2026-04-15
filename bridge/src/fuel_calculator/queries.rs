@@ -43,6 +43,20 @@ struct LapData {
 }
 
 // ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+/// SQL fragment for the session type filter.
+/// Always includes Race sessions; optionally includes Practice sessions.
+fn session_type_sql(include_practice: bool) -> &'static str {
+    if include_practice {
+        "(s.session_type LIKE '%Race%' OR s.session_type LIKE 'Practice%')"
+    } else {
+        "s.session_type LIKE '%Race%'"
+    }
+}
+
+// ---------------------------------------------------------------------------
 // Public: get_options
 // ---------------------------------------------------------------------------
 
@@ -75,7 +89,7 @@ pub fn get_options(conn: &Connection) -> Result<FuelCalcOptions> {
     // Valid lap = player, race session, not lap 1, not inlap (is_pit=1),
     //             not outlap-after-pit (prev lap is_pit=1), has fuel data.
     let mut opts_stmt = conn.prepare(
-        "SELECT
+        &format!("SELECT
              s.track_venue,
              s.track_course,
              s.track_length,
@@ -89,7 +103,7 @@ pub fn get_options(conn: &Connection) -> Result<FuelCalcOptions> {
          LEFT JOIN laps prev_l
                       ON prev_l.driver_id = l.driver_id
                      AND prev_l.lap_num   = l.lap_num - 1
-         WHERE s.session_type LIKE '%Race%'
+         WHERE {sess}
            AND s.track_venue IS NOT NULL
            AND l.lap_num   > 1
            AND l.is_pit    = 0
@@ -99,6 +113,7 @@ pub fn get_options(conn: &Connection) -> Result<FuelCalcOptions> {
          GROUP BY s.track_venue, s.track_course, s.track_length,
                   d.car_class, d.car_type
          ORDER BY s.track_venue, d.car_class, d.car_type",
+         sess = session_type_sql(true)),
     )?;
 
     struct RowData {
@@ -129,13 +144,14 @@ pub fn get_options(conn: &Connection) -> Result<FuelCalcOptions> {
     // GROUP BY (track_venue, car_type, fuel_mult) then order by MAX(date_time) DESC
     // so the first row per track+car is the default (most recent) FuelMult.
     let mut fm_stmt = conn.prepare(
-        "SELECT s.track_venue, d.car_type, s.fuel_mult, MAX(s.date_time) AS latest_dt
+        &format!("SELECT s.track_venue, d.car_type, s.fuel_mult, MAX(s.date_time) AS latest_dt
          FROM sessions s
          JOIN drivers d ON d.session_id = s.id AND d.is_player = 1
-         WHERE s.session_type LIKE '%Race%'
+         WHERE {sess}
            AND s.fuel_mult IS NOT NULL
          GROUP BY s.track_venue, d.car_type, s.fuel_mult
          ORDER BY s.track_venue, d.car_type, latest_dt DESC",
+         sess = session_type_sql(true)),
     )?;
 
     struct FmRow {
@@ -224,6 +240,8 @@ pub struct ComputeParams {
     pub race_laps: Option<u32>,
     pub race_minutes: Option<f64>,
     pub include_all_versions: bool,
+    /// If true, Practice sessions are included alongside Race sessions.
+    pub include_practice: bool,
     /// FuelMult filter. `None` = auto (most recent session's FuelMult for this combo).
     pub fuel_mult: Option<f64>,
     /// Extra buffer laps added to recommended start fuel/VE. Default: 1.
@@ -258,7 +276,7 @@ pub fn compute(conn: &Connection, params: ComputeParams) -> Result<FuelCalcResul
 
     // Determine FuelMult filter: use explicit override or auto-detect from most recent session.
     let filter_fuel_mult: Option<f64> = params.fuel_mult.or_else(|| {
-        query_fuel_mult(conn, &params.track_venue, &params.car_name, filter_version)
+        query_fuel_mult(conn, &params.track_venue, &params.car_name, filter_version, params.include_practice)
     });
 
     // Fetch valid laps.
@@ -268,6 +286,7 @@ pub fn compute(conn: &Connection, params: ComputeParams) -> Result<FuelCalcResul
         &params.car_name,
         filter_version,
         filter_fuel_mult,
+        params.include_practice,
     )?;
 
     if laps.is_empty() {
@@ -431,7 +450,7 @@ fn compute_stint_and_stops(consumption_pct_per_lap: f64, race_laps: u32) -> (Opt
     (Some(stint_laps), Some(pit_stops))
 }
 
-fn valid_laps_base_sql(with_version_filter: bool, with_fuel_mult_filter: bool) -> String {
+fn valid_laps_base_sql(with_version_filter: bool, with_fuel_mult_filter: bool, include_practice: bool) -> String {
     // ?1 = track_venue, ?2 = car_name, then optional ?3 / ?4 per active filter.
     let mut next_param = 2i32;
 
@@ -449,6 +468,8 @@ fn valid_laps_base_sql(with_version_filter: bool, with_fuel_mult_filter: bool) -
         String::new()
     };
 
+    let sess = session_type_sql(include_practice);
+
     format!(
         "SELECT l.fuel_used, l.ve_used, l.lap_time, l.session_id
          FROM sessions s
@@ -459,7 +480,7 @@ fn valid_laps_base_sql(with_version_filter: bool, with_fuel_mult_filter: bool) -
                      AND prev_l.lap_num   = l.lap_num - 1
          WHERE s.track_venue    = ?1
            AND d.car_type       = ?2
-           AND s.session_type LIKE '%Race%'
+           AND {sess}
            AND l.lap_num   > 1
            AND l.is_pit    = 0
            AND (prev_l.id IS NULL OR prev_l.is_pit = 0)
@@ -476,8 +497,9 @@ fn query_valid_laps(
     car_name: &str,
     version: Option<&str>,
     fuel_mult: Option<f64>,
+    include_practice: bool,
 ) -> Result<Vec<LapData>> {
-    let sql = valid_laps_base_sql(version.is_some(), fuel_mult.is_some());
+    let sql = valid_laps_base_sql(version.is_some(), fuel_mult.is_some(), include_practice);
     let mut stmt = conn.prepare(&sql)?;
 
     let map_row = |row: &rusqlite::Row<'_>| -> rusqlite::Result<LapData> {
@@ -512,19 +534,21 @@ fn query_fuel_mult(
     track_venue: &str,
     car_name: &str,
     version: Option<&str>,
+    include_practice: bool,
 ) -> Option<f64> {
     let version_clause = if version.is_some() {
         "AND s.game_version = ?3"
     } else {
         ""
     };
+    let sess = session_type_sql(include_practice);
     let sql = format!(
         "SELECT s.fuel_mult
          FROM sessions s
          JOIN drivers d ON d.session_id = s.id AND d.is_player = 1
          WHERE s.track_venue    = ?1
            AND d.car_type       = ?2
-           AND s.session_type LIKE '%Race%'
+           AND {sess}
            AND s.fuel_mult IS NOT NULL
            {version_clause}
          ORDER BY s.date_time DESC

@@ -17,6 +17,7 @@ pub fn handle_command(cmd: ClientCommand) -> ServerMessage {
             race_laps,
             race_minutes,
             include_all_versions,
+            include_practice,
             fuel_mult,
             buffer_laps,
         } => fuel_calc_compute(ComputeParams {
@@ -25,6 +26,7 @@ pub fn handle_command(cmd: ClientCommand) -> ServerMessage {
             race_laps,
             race_minutes,
             include_all_versions,
+            include_practice,
             fuel_mult,
             buffer_laps: buffer_laps.unwrap_or(1),
         }),
@@ -43,6 +45,11 @@ fn fuel_calc_init() -> ServerMessage {
             }
         }
     };
+    if let Err(e) = db.ensure_initialized(None) {
+        return ServerMessage::FuelCalcError {
+            message: format!("Import failed: {e}"),
+        };
+    }
     let conn = db.lock();
     match get_options(&conn) {
         Ok(options) => ServerMessage::FuelCalcOptions { options },

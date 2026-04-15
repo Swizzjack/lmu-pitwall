@@ -219,6 +219,7 @@ export default function FuelCalculator({ onClose }: { onClose: () => void }) {
   const [distanceMode, setDistanceMode] = useState<'laps' | 'time'>('time')
   const [distanceValue, setDistanceValue] = useState('')
   const [includeAllVersions, setIncludeAllVersions] = useState(false)
+  const [includePractice, setIncludePractice] = useState(true)
   const [fuelMultOverride, setFuelMultOverride] = useState<string>('')  // '' = auto
   const [bufferLaps, setBufferLaps] = useState(1)
   const [consumptionMult, setConsumptionMult] = useState(1.0)
@@ -360,6 +361,7 @@ export default function FuelCalculator({ onClose }: { onClose: () => void }) {
       track_venue: selectedTrack,
       car_name: selectedCar,
       include_all_versions: includeAllVersions,
+      include_practice: includePractice,
       buffer_laps: bufferLaps,
     }
 
@@ -822,6 +824,28 @@ export default function FuelCalculator({ onClose }: { onClose: () => void }) {
                   Versions in DB: {gameVersions.map(fmtVersion).join(', ')}
                 </span>
               )}
+            </div>
+
+            {/* Session type filter */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
+              <Label>Session Data</Label>
+              <label style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: 7,
+                cursor: 'pointer',
+                fontFamily: fonts.body,
+                fontSize: 13,
+                color: colors.text,
+              }}>
+                <input
+                  type="checkbox"
+                  checked={includePractice}
+                  onChange={() => setIncludePractice(v => !v)}
+                  style={{ accentColor: colors.primary }}
+                />
+                Include Practice sessions
+              </label>
             </div>
 
             {/* Manual Overrides */}
