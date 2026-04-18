@@ -11,6 +11,7 @@ mod http_server;
 mod lap_tracker;
 mod post_race;
 mod protocol;
+mod race_engineer;
 mod rest_api;
 mod shared_memory;
 mod websocket;
@@ -564,6 +565,7 @@ async fn task_broadcaster(
     telemetry_fps: u32,
     scoring_fps: u32,
     all_drivers_tx: tokio::sync::watch::Sender<Option<ServerMessage>>,
+    engineer_service: Arc<race_engineer::RaceEngineerService>,
 ) {
     let tel_interval         = Duration::from_millis(1000 / telemetry_fps.max(1) as u64);
     let scoring_interval     = Duration::from_millis(1000 / scoring_fps.max(1) as u64);
@@ -584,8 +586,16 @@ async fn task_broadcaster(
     let mut fuel_snapshot = FuelSnapshot::default();
     let mut fuel_session_key = String::new();
 
+    // Template registry for rule-fired TTS synthesis.
+    let engineer_templates = race_engineer::rules::templates::TemplateRegistry::new();
+    // Audio broadcast sender — only audio-role clients receive EngineerAudio.
+    let audio_broadcaster = ws.audio_broadcaster();
+
     // All-drivers lap snapshot tracker.
     let mut lap_tracker = LapTracker::new();
+
+    // Race engineer 10 Hz throttle.
+    let mut last_engineer_tick = Instant::now() - Duration::from_millis(100);
     let mut had_drivers_snapshot = false;
 
     // Tick at 2× the fastest rate so we never miss a window.
@@ -761,6 +771,109 @@ async fn task_broadcaster(
                 let _ = all_drivers_tx.send(Some(all_drivers_msg));
             }
         }
+
+        // --- Race engineer 10 Hz tick ---
+        if now.duration_since(last_engineer_tick) >= Duration::from_millis(100) {
+            last_engineer_tick = now;
+
+            let s = state.read().await;
+            if s.is_connected {
+                let safety_car_active = s.rules.as_ref()
+                    .map(|r| r.mRules.mSafetyCarActive != 0)
+                    .unwrap_or(false);
+                let ve_available = s.ve_available;
+
+                let mut aggregator = engineer_service.aggregator.lock().await;
+                let current = aggregator.build_state(
+                    s.scoring.as_ref(),
+                    s.telemetry.as_ref(),
+                    &fuel_snapshot,
+                    safety_car_active,
+                    ve_available,
+                );
+                drop(s); // release read lock before dispatcher
+
+                let prev = aggregator.previous().cloned();
+                let mut dispatcher = engineer_service.dispatcher.lock().await;
+                let events = dispatcher.tick(&current, prev.as_ref());
+                let active_voice = dispatcher.behavior.active_voice.clone();
+                drop(dispatcher);
+
+                aggregator.advance(current);
+                drop(aggregator);
+
+                // TTS synthesis for rule-fired events.
+                for event in events {
+                    let text = match engineer_templates.render(event.template_key, &event.params) {
+                        Some(t) => t,
+                        None => {
+                            warn!(
+                                "Engineer: unknown template key '{}' for rule '{}'",
+                                event.template_key, event.rule_id
+                            );
+                            continue;
+                        }
+                    };
+
+                    let voice_id = match active_voice.clone() {
+                        Some(v) => v,
+                        None => {
+                            warn!(
+                                "Engineer: no active voice set — dropping event rule='{}'",
+                                event.rule_id
+                            );
+                            continue;
+                        }
+                    };
+
+                    info!(
+                        "Processing event: rule={} text={}",
+                        event.rule_id, text
+                    );
+
+                    let priority_str = event.priority.as_str().to_string();
+                    let rule_id = event.rule_id;
+                    let svc = engineer_service.clone();
+                    let audio_tx = audio_broadcaster.clone();
+
+                    tokio::spawn(async move {
+                        use crate::race_engineer::audio::{pcm_to_wav, wav_to_base64};
+                        use crate::race_engineer::tts_engine::{SynthesisRequest, TtsError};
+
+                        let req = SynthesisRequest {
+                            text: text.clone(),
+                            voice_id,
+                        };
+                        let mut engine = svc.engine.lock().await;
+                        match engine.synthesize(req).await {
+                            Ok(result) => {
+                                let wav = pcm_to_wav(&result.pcm, result.sample_rate);
+                                let wav_base64 = wav_to_base64(&wav);
+                                let n = audio_tx.receiver_count();
+                                info!("Engineer audio broadcast to {n} audio clients");
+                                let _ = audio_tx.send(Arc::new(ServerMessage::EngineerAudio {
+                                    request_id: format!("rule_{rule_id}"),
+                                    priority: priority_str,
+                                    wav_base64,
+                                    sample_rate: result.sample_rate,
+                                    duration_ms: result.duration_ms,
+                                    text,
+                                }));
+                            }
+                            Err(TtsError::VoiceNotInstalled(id)) => {
+                                warn!("Engineer synthesis failed (rule={rule_id}): voice not installed: {id}");
+                            }
+                            Err(TtsError::PiperNotInstalled) => {
+                                warn!("Engineer synthesis failed (rule={rule_id}): piper not installed");
+                            }
+                            Err(e) => {
+                                warn!("Engineer synthesis failed (rule={rule_id}): {e}");
+                            }
+                        }
+                    });
+                }
+            }
+        }
     }
 }
 
@@ -858,7 +971,8 @@ async fn main() -> Result<()> {
         tokio::sync::watch::channel::<Option<ServerMessage>>(None);
 
     let state = Arc::new(RwLock::new(TelemetryState::new()));
-    let ws    = Arc::new(WebSocketServer::new(config.ws_port, all_drivers_rx, version_info_rx));
+    let engineer_service = Arc::new(race_engineer::RaceEngineerService::new());
+    let ws    = Arc::new(WebSocketServer::new(config.ws_port, all_drivers_rx, version_info_rx, engineer_service.clone()));
 
     // Task 1 + 3: Shared memory polling + health check
     {
@@ -870,11 +984,14 @@ async fn main() -> Result<()> {
 
     // Task 2: Rate-limited WebSocket broadcaster
     {
-        let state       = state.clone();
-        let ws          = ws.clone();
-        let tel_fps     = config.telemetry_fps;
-        let scoring_fps = config.scoring_fps;
-        tokio::spawn(async move { task_broadcaster(state, ws, tel_fps, scoring_fps, all_drivers_tx).await });
+        let state           = state.clone();
+        let ws              = ws.clone();
+        let tel_fps         = config.telemetry_fps;
+        let scoring_fps     = config.scoring_fps;
+        let engineer_svc    = engineer_service.clone();
+        tokio::spawn(async move {
+            task_broadcaster(state, ws, tel_fps, scoring_fps, all_drivers_tx, engineer_svc).await
+        });
     }
 
     // Combined HTTP + WebSocket server

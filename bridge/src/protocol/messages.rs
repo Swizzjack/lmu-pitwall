@@ -308,6 +308,43 @@ pub enum ServerMessage {
     FuelCalcError { message: String },
 
     // -----------------------------------------------------------------------
+    // Race Engineer responses
+    // -----------------------------------------------------------------------
+    EngineerStatus {
+        piper_installed: bool,
+        piper_version: &'static str,
+        voices: Vec<EngineerVoiceStatus>,
+    },
+
+    EngineerInstallProgress {
+        target: String,
+        target_id: Option<String>,
+        bytes_downloaded: u64,
+        bytes_total: Option<u64>,
+        stage: String,
+    },
+
+    EngineerInstallComplete {
+        target: String,
+        target_id: Option<String>,
+        success: bool,
+        error: Option<String>,
+    },
+
+    EngineerAudio {
+        request_id: String,
+        priority: String,
+        wav_base64: String,
+        sample_rate: u32,
+        duration_ms: u32,
+        text: String,
+    },
+
+    EngineerError {
+        message: String,
+    },
+
+    // -----------------------------------------------------------------------
     // Version info
     // -----------------------------------------------------------------------
     /// Sent once on client connect (and after background check completes).
@@ -317,6 +354,12 @@ pub enum ServerMessage {
         download_url: String,
         update_available: bool,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EngineerVoiceStatus {
+    pub voice_id: String,
+    pub installed: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -496,6 +539,26 @@ pub enum ClientCommand {
     PostRaceEvents { session_id: i64 },
     /// Fetch aggregate stats for the fun-fact ticker.
     PostRaceFunFacts,
+
+    // -----------------------------------------------------------------------
+    // Race Engineer commands
+    // -----------------------------------------------------------------------
+    EngineerGetStatus,
+    EngineerInstallPiper,
+    EngineerInstallVoice { voice_id: String },
+    EngineerUninstallVoice { voice_id: String },
+    EngineerSynthesize { voice_id: String, text: String, request_id: String },
+    /// Register the client's audio role. "audio" (default) = receives EngineerAudio
+    /// messages. "display_only" = no audio, visual only. Send immediately after connect.
+    EngineerRegisterClientRole { role: String },
+    /// Update the rule-engine behavior snapshot (sent on every relevant settings change).
+    EngineerUpdateBehavior {
+        enabled: bool,
+        frequency: String,
+        mute_in_qualifying: bool,
+        debug_all_rules_in_practice: bool,
+        active_voice_id: Option<String>,
+    },
 
     // -----------------------------------------------------------------------
     // Fuel Calculator commands
