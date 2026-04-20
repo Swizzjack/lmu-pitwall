@@ -17,11 +17,11 @@ interface Props {
 export default function SettingsPanel({ voices: initialVoices }: Props) {
   const {
     enabled, activeVoiceId, volume, frequency, radioEffect, outputDeviceId,
-    audioOnThisDevice, muteInQualifying, debugAllRulesInPractice,
+    audioOnThisDevice, muteInQualifying, debugAllRulesInPractice, pilotName, muteNameInCallouts,
   } = useEngineerSettingsStore()
   const {
     setEnabled, setActiveVoiceId, setVolume, setRadioEffect, setOutputDevice, setAudioOnThisDevice,
-    setFrequency, setMuteInQualifying, setDebugAllRulesInPractice,
+    setFrequency, setMuteInQualifying, setDebugAllRulesInPractice, setPilotName, setMuteNameInCallouts,
   } = useEngineerSettingsStore()
 
   const [voices, setVoices] = useState<VoiceStatus[]>(initialVoices)
@@ -158,6 +158,12 @@ export default function SettingsPanel({ voices: initialVoices }: Props) {
 
         <Section title="Behavior">
           <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+            <PilotNameRow
+              name={pilotName}
+              muted={muteNameInCallouts}
+              onNameChange={setPilotName}
+              onMuteToggle={setMuteNameInCallouts}
+            />
             <FrequencySelect value={frequency} onChange={setFrequency} />
             <ToggleRow
               label="Mute during qualifying"
@@ -251,6 +257,46 @@ function ToggleRow({ label, value, onChange, helpText }: {
           {helpText}
         </div>
       )}
+    </div>
+  )
+}
+
+function PilotNameRow({ name, muted, onNameChange, onMuteToggle }: {
+  name: string
+  muted: boolean
+  onNameChange: (v: string) => void
+  onMuteToggle: (v: boolean) => void
+}) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+      <input
+        type="text"
+        value={name}
+        onChange={(e) => onNameChange(e.target.value)}
+        placeholder="Driver name (optional)"
+        maxLength={32}
+        style={{
+          background: colors.bgWidget,
+          border: `1px solid ${colors.border}`,
+          borderRadius: 4,
+          color: colors.text,
+          fontFamily: fonts.body,
+          fontSize: 14,
+          padding: '5px 10px',
+          outline: 'none',
+          width: '100%',
+          boxSizing: 'border-box',
+        }}
+      />
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+        <ToggleSwitch value={!muted} onChange={(v) => onMuteToggle(!v)} />
+        <span style={{ fontFamily: fonts.body, fontSize: 14, color: colors.text }}>
+          Use name in callouts
+        </span>
+      </div>
+      <div style={{ fontFamily: fonts.body, fontSize: 11, color: colors.textMuted, lineHeight: 1.5 }}>
+        If set, the engineer may address you by name in selected callouts (position gained, personal best, pace). Disable if the pronunciation sounds off.
+      </div>
     </div>
   )
 }

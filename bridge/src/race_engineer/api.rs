@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use tokio::sync::{broadcast, mpsc};
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use crate::protocol::messages::{
     ClientCommand, EngineerVoiceStatus, ServerMessage,
@@ -90,12 +90,14 @@ pub async fn handle_command(
             mute_in_qualifying,
             debug_all_rules_in_practice,
             active_voice_id,
+            pilot_name,
+            mute_name,
         } => {
             info!(
                 "Behavior updated: enabled={enabled}, frequency={frequency}, \
                  mute_qual={mute_in_qualifying}, debug_practice={debug_all_rules_in_practice}, \
-                 voice={:?}",
-                active_voice_id
+                 voice={:?}, pilot={:?}, mute_name={mute_name}",
+                active_voice_id, pilot_name
             );
             let behavior = EngineerBehavior {
                 enabled,
@@ -103,6 +105,8 @@ pub async fn handle_command(
                 mute_in_qualifying,
                 debug_all_rules_in_practice,
                 active_voice: active_voice_id,
+                pilot_name: pilot_name.filter(|n| !n.is_empty()),
+                mute_name,
             };
             service.dispatcher.lock().await.update_behavior(behavior);
         }
@@ -246,7 +250,7 @@ async fn run_synthesize(
             let wav = pcm_to_wav(&result.pcm, result.sample_rate);
             let wav_base64 = wav_to_base64(&wav);
             let n = broadcaster.receiver_count();
-            info!("Engineer audio broadcast to {n} audio clients");
+            debug!("Engineer audio broadcast to {n} audio clients");
             broadcast_msg(
                 &broadcaster,
                 ServerMessage::EngineerAudio {

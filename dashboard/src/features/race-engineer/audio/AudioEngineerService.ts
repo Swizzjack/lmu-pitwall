@@ -29,6 +29,8 @@ class AudioEngineerService {
     muteInQualifying: false,
     debugAllRulesInPractice: false,
     activeVoiceId: null as string | null,
+    pilotName: '',
+    muteNameInCallouts: false,
   }
 
   private queue = new PriorityQueue()
@@ -258,8 +260,13 @@ class AudioEngineerService {
 
   // ── Settings ───────────────────────────────────────────────────────────────
 
-  sendBehaviorUpdate(params: { enabled: boolean; frequency: 'low' | 'medium' | 'high'; muteInQualifying: boolean; debugAllRulesInPractice: boolean; activeVoiceId?: string | null }) {
-    this.cachedBehavior = { ...params, activeVoiceId: params.activeVoiceId ?? null }
+  sendBehaviorUpdate(params: { enabled: boolean; frequency: 'low' | 'medium' | 'high'; muteInQualifying: boolean; debugAllRulesInPractice: boolean; activeVoiceId?: string | null; pilotName?: string; muteNameInCallouts?: boolean }) {
+    this.cachedBehavior = {
+      ...params,
+      activeVoiceId: params.activeVoiceId ?? null,
+      pilotName: params.pilotName ?? '',
+      muteNameInCallouts: params.muteNameInCallouts ?? false,
+    }
     this.sendCurrentBehavior()
   }
 
@@ -271,6 +278,8 @@ class AudioEngineerService {
       mute_in_qualifying: this.cachedBehavior.muteInQualifying,
       debug_all_rules_in_practice: this.cachedBehavior.debugAllRulesInPractice,
       active_voice_id: this.cachedBehavior.activeVoiceId ?? null,
+      pilot_name: this.cachedBehavior.pilotName || null,
+      mute_name: this.cachedBehavior.muteNameInCallouts,
     })
   }
 

@@ -13,6 +13,8 @@ export interface EngineerSettings {
   audioOnThisDevice: boolean
   muteInQualifying: boolean
   debugAllRulesInPractice: boolean
+  pilotName: string
+  muteNameInCallouts: boolean
 }
 
 interface EngineerSettingsStore extends EngineerSettings {
@@ -26,6 +28,8 @@ interface EngineerSettingsStore extends EngineerSettings {
   setFrequency: (v: 'low' | 'medium' | 'high') => void
   setMuteInQualifying: (v: boolean) => void
   setDebugAllRulesInPractice: (v: boolean) => void
+  setPilotName: (v: string) => void
+  setMuteNameInCallouts: (v: boolean) => void
 }
 
 const SETUP_KEY = 'lmu-pitwall:engineer-setup-completed:v1'
@@ -52,15 +56,19 @@ const defaults: EngineerSettings = {
   audioOnThisDevice: true,
   muteInQualifying: false,
   debugAllRulesInPractice: false,
+  pilotName: '',
+  muteNameInCallouts: false,
 }
 
-function sendBehavior(s: Pick<EngineerSettings, 'enabled' | 'frequency' | 'muteInQualifying' | 'debugAllRulesInPractice' | 'activeVoiceId'>) {
+function sendBehavior(s: Pick<EngineerSettings, 'enabled' | 'frequency' | 'muteInQualifying' | 'debugAllRulesInPractice' | 'activeVoiceId' | 'pilotName' | 'muteNameInCallouts'>) {
   engineerService.sendBehaviorUpdate({
     enabled: s.enabled,
     frequency: s.frequency,
     muteInQualifying: s.muteInQualifying,
     debugAllRulesInPractice: s.debugAllRulesInPractice,
     activeVoiceId: s.activeVoiceId,
+    pilotName: s.pilotName,
+    muteNameInCallouts: s.muteNameInCallouts,
   })
 }
 
@@ -76,32 +84,37 @@ export const useEngineerSettingsStore = create<EngineerSettingsStore>()(
       setEnabled(enabled) {
         engineerService.setEnabled(enabled)
         set({ enabled })
-        const s = get()
-        sendBehavior({ enabled, frequency: s.frequency, muteInQualifying: s.muteInQualifying, debugAllRulesInPractice: s.debugAllRulesInPractice, activeVoiceId: s.activeVoiceId })
+        sendBehavior(get())
       },
 
       setActiveVoiceId(activeVoiceId) {
         set({ activeVoiceId })
-        const s = get()
-        sendBehavior({ enabled: s.enabled, frequency: s.frequency, muteInQualifying: s.muteInQualifying, debugAllRulesInPractice: s.debugAllRulesInPractice, activeVoiceId })
+        sendBehavior(get())
       },
 
       setFrequency(frequency) {
         set({ frequency })
-        const s = get()
-        sendBehavior({ enabled: s.enabled, frequency, muteInQualifying: s.muteInQualifying, debugAllRulesInPractice: s.debugAllRulesInPractice, activeVoiceId: s.activeVoiceId })
+        sendBehavior(get())
       },
 
       setMuteInQualifying(muteInQualifying) {
         set({ muteInQualifying })
-        const s = get()
-        sendBehavior({ enabled: s.enabled, frequency: s.frequency, muteInQualifying, debugAllRulesInPractice: s.debugAllRulesInPractice, activeVoiceId: s.activeVoiceId })
+        sendBehavior(get())
       },
 
       setDebugAllRulesInPractice(debugAllRulesInPractice) {
         set({ debugAllRulesInPractice })
-        const s = get()
-        sendBehavior({ enabled: s.enabled, frequency: s.frequency, muteInQualifying: s.muteInQualifying, debugAllRulesInPractice, activeVoiceId: s.activeVoiceId })
+        sendBehavior(get())
+      },
+
+      setPilotName(pilotName) {
+        set({ pilotName })
+        sendBehavior(get())
+      },
+
+      setMuteNameInCallouts(muteNameInCallouts) {
+        set({ muteNameInCallouts })
+        sendBehavior(get())
       },
 
       setVolume(volume) {
@@ -133,7 +146,7 @@ export const useEngineerSettingsStore = create<EngineerSettingsStore>()(
         engineerService.setRadioEffect(state.radioEffect)
         engineerService.setOutputDevice(state.outputDeviceId)
         engineerService.setAudioOnThisDevice(state.audioOnThisDevice)
-        sendBehavior({ enabled: state.enabled, frequency: state.frequency, muteInQualifying: state.muteInQualifying, debugAllRulesInPractice: state.debugAllRulesInPractice, activeVoiceId: state.activeVoiceId })
+        sendBehavior(state)
       },
     },
   ),

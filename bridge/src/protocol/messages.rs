@@ -558,6 +558,10 @@ pub enum ClientCommand {
         mute_in_qualifying: bool,
         debug_all_rules_in_practice: bool,
         active_voice_id: Option<String>,
+        #[serde(default)]
+        pilot_name: Option<String>,
+        #[serde(default)]
+        mute_name: bool,
     },
 
     // -----------------------------------------------------------------------

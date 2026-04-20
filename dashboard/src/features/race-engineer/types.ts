@@ -8,7 +8,7 @@ export type EngineerCommand =
   | { command: 'engineer_uninstall_voice'; voice_id: string }
   | { command: 'engineer_synthesize'; voice_id: string; text: string; request_id: string }
   | { command: 'engineer_register_client_role'; role: 'audio' | 'display_only' }
-  | { command: 'engineer_update_behavior'; enabled: boolean; frequency: 'low' | 'medium' | 'high'; mute_in_qualifying: boolean; debug_all_rules_in_practice: boolean; active_voice_id: string | null }
+  | { command: 'engineer_update_behavior'; enabled: boolean; frequency: 'low' | 'medium' | 'high'; mute_in_qualifying: boolean; debug_all_rules_in_practice: boolean; active_voice_id: string | null; pilot_name: string | null; mute_name: boolean }
 
 export interface VoiceStatus {
   voice_id: string

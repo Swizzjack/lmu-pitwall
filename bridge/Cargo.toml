@@ -1,6 +1,6 @@
 [package]
 name = "lmu-pitwall"
-version = "1.1.10"
+version = "1.1.13"
 edition = "2021"
 description = "Real-time sim racing dashboard for Le Mans Ultimate"
 authors = ["Swizzjack"]
@@ -32,6 +32,7 @@ hex = "0.4"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 base64 = "0.22"
 bitflags = "2"
+rand = "0.8"
 
 [dev-dependencies]
 tempfile = "3"

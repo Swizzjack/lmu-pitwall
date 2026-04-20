@@ -15,6 +15,7 @@ use tracing::{debug, info, warn};
 use crate::fuel_calculator::api::handle_command as fuel_handle;
 use crate::post_race::api::handle_command as post_race_handle;
 use crate::protocol::messages::{ClientCommand, ServerMessage};
+use crate::race_engineer::{self, RaceEngineerService};
 
 /// Broadcast channel capacity — number of queued messages per slow client
 /// before older messages are dropped (lagged receiver).
@@ -33,9 +34,13 @@ pub enum Format {
 ///
 /// Accepts clients on `ws://0.0.0.0:<port>` and fans out every
 /// [`ServerMessage`] sent via [`broadcast`] to all connected clients.
+/// `EngineerAudio` messages use a separate `audio_tx` channel so that clients
+/// registered as `display_only` never receive large WAV payloads.
 pub struct WebSocketServer {
     port: u16,
     tx: broadcast::Sender<Arc<ServerMessage>>,
+    /// Audio-only channel — only `EngineerAudio` messages are sent here.
+    audio_tx: broadcast::Sender<Arc<ServerMessage>>,
     /// Live count of connected WebSocket clients.
     client_count: Arc<AtomicUsize>,
     /// Watch channel — subscribers receive the new count on every change.
@@ -44,6 +49,7 @@ pub struct WebSocketServer {
     all_drivers_rx: watch::Receiver<Option<ServerMessage>>,
     /// Latest VersionInfo — sent immediately to newly connecting clients.
     version_info_rx: watch::Receiver<Option<ServerMessage>>,
+    engineer_service: Arc<RaceEngineerService>,
 }
 
 impl WebSocketServer {
@@ -51,16 +57,20 @@ impl WebSocketServer {
         port: u16,
         all_drivers_rx: watch::Receiver<Option<ServerMessage>>,
         version_info_rx: watch::Receiver<Option<ServerMessage>>,
+        engineer_service: Arc<RaceEngineerService>,
     ) -> Self {
         let (tx, _) = broadcast::channel(BROADCAST_CAPACITY);
+        let (audio_tx, _) = broadcast::channel(BROADCAST_CAPACITY);
         let (count_tx, _) = watch::channel(0usize);
         WebSocketServer {
             port,
             tx,
+            audio_tx,
             client_count: Arc::new(AtomicUsize::new(0)),
             count_tx,
             all_drivers_rx,
             version_info_rx,
+            engineer_service,
         }
     }
 
@@ -78,6 +88,12 @@ impl WebSocketServer {
         self.tx.clone()
     }
 
+    /// Returns a cloned sender for audio-only broadcast (EngineerAudio messages).
+    /// Only clients registered as `audio` role receive from this channel.
+    pub fn audio_broadcaster(&self) -> broadcast::Sender<Arc<ServerMessage>> {
+        self.audio_tx.clone()
+    }
+
     /// Send a message to every connected client.
     pub fn broadcast(&self, msg: ServerMessage) -> usize {
         match self.tx.send(Arc::new(msg)) {
@@ -90,6 +106,7 @@ impl WebSocketServer {
     pub fn accept_client(&self, stream: TcpStream, peer: SocketAddr) {
         info!("New WebSocket connection from {}", peer);
         let rx = self.tx.subscribe();
+        let audio_rx = self.audio_tx.subscribe();
 
         let count = self.client_count.fetch_add(1, Ordering::Relaxed) + 1;
         let _ = self.count_tx.send(count);
@@ -98,10 +115,14 @@ impl WebSocketServer {
             stream,
             peer,
             rx,
+            audio_rx,
             self.client_count.clone(),
             self.count_tx.clone(),
             self.all_drivers_rx.clone(),
             self.version_info_rx.clone(),
+            self.tx.clone(),
+            self.audio_tx.clone(),
+            self.engineer_service.clone(),
         ));
     }
 }
@@ -114,11 +135,17 @@ async fn handle_client(
     stream: TcpStream,
     peer: SocketAddr,
     mut rx: broadcast::Receiver<Arc<ServerMessage>>,
+    mut audio_rx: broadcast::Receiver<Arc<ServerMessage>>,
     client_count: Arc<AtomicUsize>,
     count_tx: watch::Sender<usize>,
     all_drivers_rx: watch::Receiver<Option<ServerMessage>>,
     version_info_rx: watch::Receiver<Option<ServerMessage>>,
+    ws_broadcaster: broadcast::Sender<Arc<ServerMessage>>,
+    _audio_broadcaster: broadcast::Sender<Arc<ServerMessage>>,
+    engineer_service: Arc<RaceEngineerService>,
 ) {
+    // Default role is audio — this device plays engineer callouts.
+    let mut is_audio = true;
     let is_json = Arc::new(AtomicBool::new(false));
     let is_json_cb = is_json.clone();
 
@@ -203,6 +230,38 @@ async fn handle_client(
                 }
             }
 
+            // Audio-only channel: only forwarded to clients with `audio` role.
+            audio_result = audio_rx.recv() => {
+                if is_audio {
+                    match audio_result {
+                        Ok(msg) => {
+                            match serialize(&msg, fmt) {
+                                Ok(ws_msg) => {
+                                    if let Err(e) = sink.send(ws_msg).await {
+                                        debug!("Send audio to {} failed: {}", peer, e);
+                                        break;
+                                    }
+                                }
+                                Err(e) => {
+                                    warn!("Audio serialization error for {}: {}", peer, e);
+                                }
+                            }
+                        }
+                        Err(broadcast::error::RecvError::Lagged(dropped)) => {
+                            warn!("Client {} audio too slow, dropped {}", peer, dropped);
+                        }
+                        Err(broadcast::error::RecvError::Closed) => {
+                            break;
+                        }
+                    }
+                } else {
+                    // display_only: drain audio_rx without forwarding.
+                    if let Err(broadcast::error::RecvError::Closed) = audio_result {
+                        break;
+                    }
+                }
+            }
+
             // Inbound: dispatch text commands; close and drop everything else.
             frame = incoming.next() => {
                 match frame {
@@ -217,43 +276,63 @@ async fn handle_client(
                     Some(Ok(Message::Text(text))) => {
                         match serde_json::from_str::<ClientCommand>(&text) {
                             Ok(cmd) => {
-                                let response = tokio::task::spawn_blocking(move || {
-                                    dispatch_command(cmd)
-                                })
-                                .await;
-                                match response {
-                                    Ok(msg) => {
-                                        match serialize(&msg, fmt) {
-                                            Ok(ws_msg) => {
-                                                if let Err(e) = sink.send(ws_msg).await {
-                                                    debug!(
-                                                        "Send to {} failed: {}",
+                                // Per-client role registration — handled locally.
+                                if let ClientCommand::EngineerRegisterClientRole { ref role } = cmd {
+                                    is_audio = role != "display_only";
+                                    info!(
+                                        "Client {} registered as {} (is_audio={})",
+                                        peer, role, is_audio
+                                    );
+                                    continue;
+                                }
+
+                                let is_engineer = matches!(
+                                    cmd,
+                                    ClientCommand::EngineerGetStatus
+                                        | ClientCommand::EngineerInstallPiper
+                                        | ClientCommand::EngineerInstallVoice { .. }
+                                        | ClientCommand::EngineerUninstallVoice { .. }
+                                        | ClientCommand::EngineerSynthesize { .. }
+                                        | ClientCommand::EngineerUpdateBehavior { .. }
+                                );
+
+                                if is_engineer {
+                                    let svc = engineer_service.clone();
+                                    let bcast = ws_broadcaster.clone();
+                                    let audio_bcast = _audio_broadcaster.clone();
+                                    tokio::spawn(async move {
+                                        race_engineer::api::handle_command(cmd, svc, bcast, audio_bcast).await;
+                                    });
+                                } else {
+                                    let response = tokio::task::spawn_blocking(move || {
+                                        dispatch_command(cmd)
+                                    })
+                                    .await;
+                                    match response {
+                                        Ok(msg) => {
+                                            match serialize(&msg, fmt) {
+                                                Ok(ws_msg) => {
+                                                    if let Err(e) = sink.send(ws_msg).await {
+                                                        debug!("Send to {} failed: {}", peer, e);
+                                                        break;
+                                                    }
+                                                }
+                                                Err(e) => {
+                                                    warn!(
+                                                        "Serialization error for {}: {}",
                                                         peer, e
                                                     );
-                                                    break;
                                                 }
                                             }
-                                            Err(e) => {
-                                                warn!(
-                                                    "Serialization error for {}: {}",
-                                                    peer, e
-                                                );
-                                            }
                                         }
-                                    }
-                                    Err(e) => {
-                                        warn!(
-                                            "Post-race task panicked for {}: {}",
-                                            peer, e
-                                        );
+                                        Err(e) => {
+                                            warn!("Post-race task panicked for {}: {}", peer, e);
+                                        }
                                     }
                                 }
                             }
                             Err(e) => {
-                                warn!(
-                                    "Unparseable client command from {}: {}",
-                                    peer, e
-                                );
+                                warn!("Unparseable client command from {}: {}", peer, e);
                             }
                         }
                     }

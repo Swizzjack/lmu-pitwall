@@ -24,7 +24,7 @@ use anyhow::Result;
 use clap::Parser;
 use tokio::sync::{RwLock, watch};
 use tokio::time::MissedTickBehavior;
-use tracing::{info, warn};
+use tracing::{debug, info, warn};
 
 use config::Config;
 use electronics::ElectronicsSnapshot;
@@ -797,13 +797,27 @@ async fn task_broadcaster(
                 let mut dispatcher = engineer_service.dispatcher.lock().await;
                 let events = dispatcher.tick(&current, prev.as_ref());
                 let active_voice = dispatcher.behavior.active_voice.clone();
+                let mute_name = dispatcher.behavior.mute_name;
+                let pilot_name = if mute_name {
+                    None
+                } else {
+                    dispatcher.behavior.pilot_name.clone()
+                };
+                debug!(
+                    "Engineer tick: pilot={:?} mute_name={mute_name} events={}",
+                    pilot_name,
+                    events.len()
+                );
                 drop(dispatcher);
 
                 aggregator.advance(current);
                 drop(aggregator);
 
                 // TTS synthesis for rule-fired events.
-                for event in events {
+                for mut event in events {
+                    if let Some(ref name) = pilot_name {
+                        event.params = event.params.set("driver_name", name.clone());
+                    }
                     let text = match engineer_templates.render(event.template_key, &event.params) {
                         Some(t) => t,
                         None => {
@@ -926,18 +940,25 @@ async fn main() -> Result<()> {
         }
     }
 
-    // Determine exe directory for the log file
-    let exe_dir = std::env::current_exe()
-        .ok()
-        .and_then(|p| p.parent().map(|p| p.to_path_buf()))
-        .unwrap_or_else(|| std::path::PathBuf::from("."));
+    let log_dir = std::env::var("APPDATA")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| {
+            std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|p| p.to_path_buf()))
+                .unwrap_or_else(|| std::path::PathBuf::from("."))
+        })
+        .join("LMUPitwall")
+        .join("logs");
 
-    // Overwrite log file each run (delete if exists, then recreate)
-    let log_path = exe_dir.join("lmu-pitwall.log");
-    let _ = std::fs::remove_file(&log_path);
+    let _ = std::fs::create_dir_all(&log_dir);
+    cleanup_old_logs(&log_dir, 7);
 
-    let file_appender = tracing_appender::rolling::never(&exe_dir, "lmu-pitwall.log");
+    let file_appender = tracing_appender::rolling::daily(&log_dir, "lmu-pitwall.log");
     let (file_writer, _guard) = tracing_appender::non_blocking(file_appender);
+
+    const DEFAULT_FILTER: &str =
+        "info,ureq=warn,tungstenite=warn,rustls=warn,hyper=warn,tokio_tungstenite=warn,ring=warn";
 
     {
         use tracing_subscriber::{fmt, prelude::*, EnvFilter};
@@ -945,13 +966,19 @@ async fn main() -> Result<()> {
             .with(
                 fmt::layer()
                     .with_writer(std::io::stdout)
-                    .with_filter(EnvFilter::new(&config.log_level)),
+                    .with_filter(
+                        EnvFilter::try_from_default_env()
+                            .unwrap_or_else(|_| EnvFilter::new(&config.log_level)),
+                    ),
             )
             .with(
                 fmt::layer()
                     .with_writer(file_writer)
                     .with_ansi(false)
-                    .with_filter(EnvFilter::new("debug")),
+                    .with_filter(
+                        EnvFilter::try_from_default_env()
+                            .unwrap_or_else(|_| EnvFilter::new(DEFAULT_FILTER)),
+                    ),
             )
             .init();
     }
@@ -1082,6 +1109,29 @@ async fn main() -> Result<()> {
 // ---------------------------------------------------------------------------
 // Auto-shutdown: exit when all browser tabs have been closed
 // ---------------------------------------------------------------------------
+
+fn cleanup_old_logs(log_dir: &std::path::Path, keep_days: u64) {
+    let cutoff = std::time::SystemTime::now()
+        .checked_sub(Duration::from_secs(keep_days * 24 * 3600))
+        .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+
+    if let Ok(entries) = std::fs::read_dir(log_dir) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().map_or(false, |e| e == "log")
+                || path.to_string_lossy().contains("lmu-pitwall.log")
+            {
+                if let Ok(meta) = entry.metadata() {
+                    if let Ok(modified) = meta.modified() {
+                        if modified < cutoff {
+                            let _ = std::fs::remove_file(&path);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
 
 /// Fetch the latest release from GitHub and return (version, download_url).
 /// Strips the leading "v" from the tag name if present.

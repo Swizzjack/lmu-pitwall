@@ -19,6 +19,10 @@ pub struct EngineerBehavior {
     pub debug_all_rules_in_practice: bool,
     /// Voice ID to use for rule-fired TTS synthesis. None = no synthesis.
     pub active_voice: Option<String>,
+    /// Pilot name spoken in selected callouts. None or empty = no name used.
+    pub pilot_name: Option<String>,
+    /// When true the name is never injected, even if pilot_name is set.
+    pub mute_name: bool,
 }
 
 impl Default for EngineerBehavior {
@@ -29,6 +33,8 @@ impl Default for EngineerBehavior {
             mute_in_qualifying: false,
             debug_all_rules_in_practice: false,
             active_voice: None,
+            pilot_name: None,
+            mute_name: false,
         }
     }
 }
@@ -96,6 +102,10 @@ impl RuleDispatcher {
             if !rule.frequency_mask().contains(freq_mask) {
                 continue;
             }
+            // Mute all non-Critical callouts while the car is physically in the pits
+            if current.in_pit && rule.priority() != Priority::Critical {
+                continue;
+            }
             // Per-rule cooldown
             if let Some(&last_fired) = self.cooldowns.get(rule.id()) {
                 if now.duration_since(last_fired) < rule.cooldown() {
@@ -145,8 +155,8 @@ impl RuleDispatcher {
 
 pub fn build_default_rules() -> Vec<Box<dyn Rule>> {
     use super::{
-        flag_rules::*, fuel_rules::*, pit_rules::*, damage_rules::*,
-        session_rules::*,
+        flag_rules::*, fuel_rules::*, pit_rules::{PitWindowOpeningRule, DrivethroughPenaltyRule, DqWarningRule, PitlaneExitBriefingRule}, damage_rules::*,
+        session_rules::{FiveMinutesRemainingRule, LastLapRule, RaceFinishedRule},
         position_rules::{PositionGainedRule, PositionLostRule, GapAheadMediumRule, GapAheadHighRule, GapBehindMediumRule, GapBehindHighRule},
         pace_rules::*, tire_rules::*,
         weather_rules::*,
@@ -168,6 +178,7 @@ pub fn build_default_rules() -> Vec<Box<dyn Rule>> {
         Box::new(PitWindowOpeningRule),
         Box::new(DrivethroughPenaltyRule),
         Box::new(DqWarningRule),
+        Box::new(PitlaneExitBriefingRule),
 
         // Damage
         Box::new(DamageReportedRule),
@@ -175,6 +186,7 @@ pub fn build_default_rules() -> Vec<Box<dyn Rule>> {
         // Session timing
         Box::new(FiveMinutesRemainingRule),
         Box::new(LastLapRule),
+        Box::new(RaceFinishedRule),
 
         // Position / gaps
         Box::new(PositionGainedRule),
