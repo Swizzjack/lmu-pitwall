@@ -17,6 +17,7 @@ Built with Rust and React. Runs as a single `.exe` — no installation required,
 - **Track Map** — SVG-based live track map with vehicle positions, updated in real-time.
 - **Post Race Results** — Load any LMU session XML log file and view detailed race results: final classification, lap times, sector times, gaps, and pitstops for all drivers.
 - **Fuel Calculator** — Calculate the required fuel or virtual energy consumption based on the sessions already completed.
+- **Race Engineer** — monitors your telemetry and speaks relevant callouts during practice, qualifying, and race — flags, fuel, tires, and more. CrewChief-style but native to LMU.
 - **Drag & Drop Layout** — Arrange and resize widgets however you like. Layout is saved automatically.
 
 ## How It Works
