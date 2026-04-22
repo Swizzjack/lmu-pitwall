@@ -54,7 +54,7 @@ function worldToSvg(x: number, z: number, b: Bounds): [number, number] {
   const scale = Math.min((SVG_SIZE - 2 * PADDING) / rX, (SVG_SIZE - 2 * PADDING) / rZ)
   const oX = (SVG_SIZE - rX * scale) / 2
   const oZ = (SVG_SIZE - rZ * scale) / 2
-  return [(x - b.minX) * scale + oX, (z - b.minZ) * scale + oZ]
+  return [(b.maxX - x) * scale + oX, (z - b.minZ) * scale + oZ]
 }
 
 // ---------------------------------------------------------------------------
