@@ -155,12 +155,37 @@ impl TemplateRegistry {
             "You've lost pole, someone went quicker.",
             "{driver_name}, session best is gone. Someone went quicker.",
         ]);
+        t.insert("class_pace_faster", &[
+            "Good pace, your lap times are faster than your class rivals.",
+            "You're running quicker than the rest of your class right now.",
+            "Pace is strong, you're ahead of your class on lap times.",
+            "{driver_name}, good pace. Faster than your class rivals.",
+        ]);
+        t.insert("class_pace_slower", &[
+            "Class rivals are running quicker, find some time.",
+            "Your class pace is dropping behind the group, push on.",
+            "They're running faster in your class, lift the pace.",
+            "{driver_name}, your class rivals are running quicker. Push on.",
+        ]);
+        t.insert("class_best_lap", &[
+            "That's the fastest lap in your class, well done.",
+            "Class fastest lap is yours now, nice work.",
+            "You've got the best lap in your class.",
+            "{driver_name}, class fastest lap. Nice work.",
+        ]);
+
         t.insert("tire_temps_warning", &[
             "Tires are too cold, manage them.",
             "Tire temps too cold, watch your pace.",
             "Tires aren't in the window yet, work them.",
             "Tire temps low, find some heat.",
             "{driver_name}, your tires are still cold.",
+        ]);
+        t.insert("tire_temps_ok", &[
+            "Tires are back in the window.",
+            "Tire temps back in range, good.",
+            "Temps are looking good now, tires in the window.",
+            "{driver_name}, tires are back in range.",
         ]);
         t.insert("tire_temps_hot_warning", &[
             "Tires are too hot, manage them.",

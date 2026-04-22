@@ -6,6 +6,9 @@ pub struct PersonalBestRule;
 pub struct PaceDroppingRule;
 pub struct SectorDeltaRule;
 pub struct SessionBestOvertakenRule;
+pub struct ClassPaceFasterRule;
+pub struct ClassPaceSlowerRule;
+pub struct ClassBestLapRule;
 
 impl Rule for PersonalBestRule {
     fn id(&self) -> &'static str { "personal_best" }
@@ -47,8 +50,8 @@ impl Rule for PaceDroppingRule {
         let avg_secs: f64 = current.recent_lap_times.iter().rev().take(3)
             .map(|d| d.as_secs_f64())
             .sum::<f64>() / 3.0;
-        // Fire when average of last 3 laps is more than 1.5% slower than personal best
-        if avg_secs > best.as_secs_f64() * 1.015 {
+        // Fire when average of last 3 laps is more than 2% slower than personal best
+        if avg_secs > best.as_secs_f64() * 1.02 {
             Some(RuleEvent {
                 rule_id: self.id(),
                 priority: self.priority(),
@@ -93,6 +96,86 @@ impl Rule for SectorDeltaRule {
             });
         }
         None
+    }
+}
+
+fn recent_avg_secs(state: &EngineerState, n: usize) -> Option<f64> {
+    let count = state.recent_lap_times.len().min(n);
+    if count < 2 { return None; }
+    let sum: f64 = state.recent_lap_times.iter().rev().take(count)
+        .map(|d| d.as_secs_f64())
+        .sum();
+    Some(sum / count as f64)
+}
+
+impl Rule for ClassPaceFasterRule {
+    fn id(&self) -> &'static str { "class_pace_faster" }
+    fn priority(&self) -> Priority { Priority::Info }
+    fn cooldown(&self) -> Duration { Duration::from_secs(120) }
+    fn session_mask(&self) -> SessionMask { SessionMask::RACE }
+    fn frequency_mask(&self) -> FrequencyMask { FrequencyMask::MEDIUM_AND_UP }
+
+    fn evaluate(&self, current: &EngineerState, _prev: Option<&EngineerState>) -> Option<RuleEvent> {
+        let my_avg = recent_avg_secs(current, 3)?;
+        let rivals_avg = current.class_rivals_avg_last_lap?.as_secs_f64();
+        if my_avg < rivals_avg * 0.99 {
+            Some(RuleEvent {
+                rule_id: self.id(),
+                priority: self.priority(),
+                template_key: "class_pace_faster",
+                params: TemplateParams::new(),
+            })
+        } else {
+            None
+        }
+    }
+}
+
+impl Rule for ClassPaceSlowerRule {
+    fn id(&self) -> &'static str { "class_pace_slower" }
+    fn priority(&self) -> Priority { Priority::Info }
+    fn cooldown(&self) -> Duration { Duration::from_secs(120) }
+    fn session_mask(&self) -> SessionMask { SessionMask::RACE }
+    fn frequency_mask(&self) -> FrequencyMask { FrequencyMask::MEDIUM_AND_UP }
+
+    fn evaluate(&self, current: &EngineerState, _prev: Option<&EngineerState>) -> Option<RuleEvent> {
+        let my_avg = recent_avg_secs(current, 3)?;
+        let rivals_avg = current.class_rivals_avg_last_lap?.as_secs_f64();
+        if my_avg > rivals_avg * 1.02 {
+            Some(RuleEvent {
+                rule_id: self.id(),
+                priority: self.priority(),
+                template_key: "class_pace_slower",
+                params: TemplateParams::new(),
+            })
+        } else {
+            None
+        }
+    }
+}
+
+impl Rule for ClassBestLapRule {
+    fn id(&self) -> &'static str { "class_best_lap" }
+    fn priority(&self) -> Priority { Priority::Info }
+    fn cooldown(&self) -> Duration { Duration::from_secs(30) }
+    fn session_mask(&self) -> SessionMask { SessionMask::ALL }
+    fn frequency_mask(&self) -> FrequencyMask { FrequencyMask::MEDIUM_AND_UP }
+
+    fn evaluate(&self, current: &EngineerState, prev: Option<&EngineerState>) -> Option<RuleEvent> {
+        let prev = prev?;
+        let my_pb = current.best_lap_time_personal?;
+        let rivals_best = current.class_rivals_min_best_lap?;
+        // Player must hold class fastest lap
+        if my_pb >= rivals_best { return None; }
+        // Only fire when the PB just improved this tick
+        let prev_pb = prev.best_lap_time_personal.unwrap_or(Duration::MAX);
+        if my_pb >= prev_pb { return None; }
+        Some(RuleEvent {
+            rule_id: self.id(),
+            priority: self.priority(),
+            template_key: "class_best_lap",
+            params: TemplateParams::new(),
+        })
     }
 }
 

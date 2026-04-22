@@ -186,6 +186,12 @@ pub struct EngineerState {
 
     /// Outstanding penalties (drive-through, stop-go, etc.)
     pub num_penalties: u32,
+
+    // Class pace comparison (rivals = same class, excluding player)
+    /// Average of rivals' most recent completed lap time; None if no valid data
+    pub class_rivals_avg_last_lap: Option<Duration>,
+    /// Fastest best-lap-time among class rivals; None if no rivals with timed laps
+    pub class_rivals_min_best_lap: Option<Duration>,
 }
 
 impl EngineerState {
@@ -555,6 +561,37 @@ impl StateAggregator {
         // --- Penalties ---
         let num_penalties = player_sc.map(|v| v.mNumPenalties.max(0) as u32).unwrap_or(0);
 
+        // --- Class rivals pace ---
+        let (class_rivals_avg_last_lap, class_rivals_min_best_lap) = sc.map(|s| {
+            let player_class_name = player_sc
+                .map(|v| &v.mVehicleClass[..])
+                .unwrap_or(&[]);
+            let rivals = s.mVehicles[..num_sc]
+                .iter()
+                .filter(|v| v.mIsPlayer == 0 && v.mVehicleClass[..] == *player_class_name);
+            let mut last_lap_sum = 0.0f64;
+            let mut last_lap_count = 0usize;
+            let mut min_best: Option<f64> = None;
+            for v in rivals {
+                if v.mLastLapTime > 0.0 {
+                    last_lap_sum += v.mLastLapTime;
+                    last_lap_count += 1;
+                }
+                if v.mBestLapTime > 0.0 {
+                    min_best = Some(match min_best {
+                        Some(m) => m.min(v.mBestLapTime),
+                        None => v.mBestLapTime,
+                    });
+                }
+            }
+            let avg = if last_lap_count > 0 {
+                Some(Duration::from_secs_f64(last_lap_sum / last_lap_count as f64))
+            } else {
+                None
+            };
+            (avg, min_best.map(Duration::from_secs_f64))
+        }).unwrap_or((None, None));
+
         EngineerState {
             tick_time: now,
             session_type,
@@ -588,6 +625,8 @@ impl StateAggregator {
             track_temp_c,
             rain_intensity,
             num_penalties,
+            class_rivals_avg_last_lap,
+            class_rivals_min_best_lap,
         }
     }
 }

@@ -201,9 +201,13 @@ pub fn build_default_rules() -> Vec<Box<dyn Rule>> {
         Box::new(PaceDroppingRule),
         Box::new(SectorDeltaRule),
         Box::new(SessionBestOvertakenRule),
+        Box::new(ClassPaceFasterRule),
+        Box::new(ClassPaceSlowerRule),
+        Box::new(ClassBestLapRule),
 
         // Tires
         Box::new(TireTempsOutOfRangeRule),
+        Box::new(TireTempsInRangeRule),
 
         // Weather
         Box::new(RainStartingRule),
