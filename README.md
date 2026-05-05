@@ -105,24 +105,39 @@ After a session, you can load the XML log file that LMU automatically saves to r
 ## Building from Source
 
 Requires: Rust (with cargo-zigbuild), Node.js, Zig 0.13+
+
 ```bash
-# In WSL2 — every cargo command needs:
 export PATH="$HOME/.local/bin:$PATH" && source ~/.cargo/env
 
 # Install dependencies
 cd dashboard && npm install && cd ..
 
-# Build release
+# Build release (standalone .exe)
 make build-release
 ```
 
 The output is a single `.exe` in `bridge/target/x86_64-pc-windows-gnu/release/`.
 
+### Full release with installer
+
+To also produce `LMU-Pitwall-Setup-x.x.x.exe`, install Wine and Inno Setup once:
+
+```bash
+sudo dnf install wine          # Fedora — or: sudo apt install wine
+./scripts/install-innosetup.sh
+```
+
+Then run the release script (bumps version, builds both `.exe` variants, starts HTTP server):
+
+```bash
+./scripts/release.sh           # or: make serve
+```
+
 ## Tech Stack
 
 - **Backend:** Rust — rF2 Shared Memory reader, WebSocket server (port 9000), REST API client
 - **Frontend:** React + TypeScript — widget-based layout with drag & drop
-- **Build:** cargo-zigbuild for Windows cross-compilation from WSL2, rust-embed for single-binary distribution
+- **Build:** cargo-zigbuild for Windows cross-compilation from Linux, rust-embed for single-binary distribution, Inno Setup 6 via Wine for the installer
 - **Design:** Dark theme (#0f0f0f background, #facc15 primary, #f97316 accent), Teko / Roboto Condensed / JetBrains Mono fonts
 
 ## Credits

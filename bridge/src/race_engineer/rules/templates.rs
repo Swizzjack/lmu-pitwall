@@ -155,17 +155,29 @@ impl TemplateRegistry {
             "You've lost pole, someone went quicker.",
             "{driver_name}, session best is gone. Someone went quicker.",
         ]);
-        t.insert("class_pace_faster", &[
-            "Good pace, your lap times are faster than your class rivals.",
-            "You're running quicker than the rest of your class right now.",
-            "Pace is strong, you're ahead of your class on lap times.",
-            "{driver_name}, good pace. Faster than your class rivals.",
+        t.insert("class_ahead_slower", &[
+            "Driver ahead is running a bit slower. Good pace, keep pushing.",
+            "You're gaining on the car ahead. Nice lap times.",
+            "Car ahead is dropping off slightly. Good pace.",
+            "{driver_name}, driver ahead is a bit slower. Good pace.",
         ]);
-        t.insert("class_pace_slower", &[
-            "Class rivals are running quicker, find some time.",
-            "Your class pace is dropping behind the group, push on.",
-            "They're running faster in your class, lift the pace.",
-            "{driver_name}, your class rivals are running quicker. Push on.",
+        t.insert("class_ahead_faster", &[
+            "Driver ahead is pulling away. Push on if you can.",
+            "Car ahead has stronger pace right now. Find some time.",
+            "You're losing ground to the car ahead. Push harder.",
+            "{driver_name}, driver ahead is faster. Push on.",
+        ]);
+        t.insert("class_behind_faster", &[
+            "Driver behind is running faster. Push on if you can.",
+            "Car behind is closing up. Lift the pace if possible.",
+            "Faster car approaching from behind. Push a little.",
+            "{driver_name}, car behind is faster. Push if you can.",
+        ]);
+        t.insert("class_behind_slower", &[
+            "Good gap to the car behind. Maintain your pace.",
+            "Driver behind is dropping off. You're pulling away nicely.",
+            "Car behind is losing pace. Good work, keep it up.",
+            "{driver_name}, you're pulling away from the car behind. Good pace.",
         ]);
         t.insert("class_best_lap", &[
             "That's the fastest lap in your class, well done.",
@@ -193,6 +205,24 @@ impl TemplateRegistry {
             "We've got hot tires, watch your style.",
             "{driver_name}, tires are overheating.",
         ]);
+        t.insert("tire_wear_50", &[
+            "Tires at fifty percent, halfway through this set.",
+            "Half wear on the tires, plenty of life left.",
+            "Tires at fifty, manage them from here.",
+            "{driver_name}, tires at half life. Manage them.",
+        ]);
+        t.insert("tire_wear_75", &[
+            "Tires at seventy-five percent, start thinking strategy.",
+            "Three quarters worn, pit window approaching.",
+            "Tires past seventy-five, plan the stop.",
+            "{driver_name}, tires at seventy-five. Pit window opening.",
+        ]);
+        t.insert("tire_wear_90", &[
+            "Tires at ninety percent, you need to box soon.",
+            "Tires nearly done, get to pit lane.",
+            "Tires shot, box this lap.",
+            "{driver_name}, tires done. Box this lap.",
+        ]);
         t.insert("green_flag", &[
             "Green flag, back to racing.",
             "Track's clear, green green green.",
@@ -204,6 +234,24 @@ impl TemplateRegistry {
             "Drying line forming, watch for it.",
             "Track's improving, drier every lap.",
             "{driver_name}, track's drying. Grip is coming back.",
+        ]);
+        t.insert("rain_heavy", &[
+            "Heavy rain now, take it easy.",
+            "Rain's getting heavy, big drop in grip.",
+            "It's coming down hard, watch yourself.",
+            "{driver_name}, heavy rain. Watch the grip.",
+        ]);
+        t.insert("ambient_temp_change", &[
+            "Air temp {direction} {delta} degrees, now {temp}.",
+            "Temperature {direction} {delta}, sitting at {temp} now.",
+            "Ambient's shifted {direction} {delta} degrees. Currently {temp}.",
+            "{driver_name}, air temp {direction} {delta} degrees. Now at {temp}.",
+        ]);
+        t.insert("track_temp_change", &[
+            "Track temp {direction} {delta} degrees, now {temp}.",
+            "Track temperature {direction} {delta}, now {temp}. Tire window may shift.",
+            "Track's {delta} degrees {direction}, sitting at {temp} now.",
+            "{driver_name}, track temp {direction} {delta} degrees. Now {temp}.",
         ]);
         t.insert("pitlane_exit_briefing", &[
             "Track {condition}, {temp} degrees. Tires are {tire_status}.",

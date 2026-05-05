@@ -6,9 +6,18 @@ pub struct PersonalBestRule;
 pub struct PaceDroppingRule;
 pub struct SectorDeltaRule;
 pub struct SessionBestOvertakenRule;
-pub struct ClassPaceFasterRule;
-pub struct ClassPaceSlowerRule;
+pub struct ClassAheadSlowerRule;
+pub struct ClassAheadFasterRule;
+pub struct ClassBehindFasterRule;
+pub struct ClassBehindSlowerRule;
 pub struct ClassBestLapRule;
+
+/// True only on the tick where a new completed lap was appended to recent_lap_times.
+/// Prevents mid-lap pace judgements — rules should judge pace when a lap is finished, not every 10 Hz tick.
+fn lap_just_completed(current: &EngineerState, prev: &EngineerState) -> bool {
+    current.recent_lap_times.back() != prev.recent_lap_times.back()
+        || current.recent_lap_times.len() != prev.recent_lap_times.len()
+}
 
 impl Rule for PersonalBestRule {
     fn id(&self) -> &'static str { "personal_best" }
@@ -44,14 +53,37 @@ impl Rule for PaceDroppingRule {
     fn session_mask(&self) -> SessionMask { SessionMask::PRACTICE | SessionMask::RACE }
     fn frequency_mask(&self) -> FrequencyMask { FrequencyMask::MEDIUM_AND_UP }
 
-    fn evaluate(&self, current: &EngineerState, _prev: Option<&EngineerState>) -> Option<RuleEvent> {
+    fn evaluate(&self, current: &EngineerState, prev: Option<&EngineerState>) -> Option<RuleEvent> {
+        let prev = prev?;
+        // Only judge pace immediately after a lap completes, not mid-lap on every 10 Hz tick.
+        if !lap_just_completed(current, prev) { return None; }
+
         let best = current.best_lap_time_personal?;
-        if current.recent_lap_times.len() < 3 { return None; }
-        let avg_secs: f64 = current.recent_lap_times.iter().rev().take(3)
+        let best_secs = best.as_secs_f64();
+
+        // Suppress when a PB was just set this tick — PersonalBestRule handles the callout.
+        if let Some(prev_best) = prev.best_lap_time_personal {
+            if best < prev_best { return None; }
+        }
+
+        // Suppress when the most recently completed lap was near-PB (within 0.5%) —
+        // the driver is clearly on pace, not dropping.
+        if let Some(&last) = current.recent_lap_times.back() {
+            if last.as_secs_f64() <= best_secs * 1.005 { return None; }
+        }
+
+        // Average of last 3 valid laps, ignoring outliers >10% slower than PB
+        // (out-laps, yellow-laps, off-track incidents skew the window otherwise).
+        let outlier_cutoff = best_secs * 1.10;
+        let valid: Vec<f64> = current.recent_lap_times.iter().rev()
+            .filter(|d| d.as_secs_f64() <= outlier_cutoff)
+            .take(3)
             .map(|d| d.as_secs_f64())
-            .sum::<f64>() / 3.0;
-        // Fire when average of last 3 laps is more than 2% slower than personal best
-        if avg_secs > best.as_secs_f64() * 1.02 {
+            .collect();
+        if valid.len() < 3 { return None; }
+        let avg_secs: f64 = valid.iter().sum::<f64>() / 3.0;
+
+        if avg_secs > best_secs * 1.02 {
             Some(RuleEvent {
                 rule_id: self.id(),
                 priority: self.priority(),
@@ -108,49 +140,79 @@ fn recent_avg_secs(state: &EngineerState, n: usize) -> Option<f64> {
     Some(sum / count as f64)
 }
 
-impl Rule for ClassPaceFasterRule {
-    fn id(&self) -> &'static str { "class_pace_faster" }
+impl Rule for ClassAheadSlowerRule {
+    fn id(&self) -> &'static str { "class_ahead_slower" }
     fn priority(&self) -> Priority { Priority::Info }
     fn cooldown(&self) -> Duration { Duration::from_secs(120) }
     fn session_mask(&self) -> SessionMask { SessionMask::RACE }
     fn frequency_mask(&self) -> FrequencyMask { FrequencyMask::MEDIUM_AND_UP }
 
-    fn evaluate(&self, current: &EngineerState, _prev: Option<&EngineerState>) -> Option<RuleEvent> {
+    fn evaluate(&self, current: &EngineerState, prev: Option<&EngineerState>) -> Option<RuleEvent> {
+        let prev = prev?;
+        if !lap_just_completed(current, prev) { return None; }
         let my_avg = recent_avg_secs(current, 3)?;
-        let rivals_avg = current.class_rivals_avg_last_lap?.as_secs_f64();
-        if my_avg < rivals_avg * 0.99 {
-            Some(RuleEvent {
-                rule_id: self.id(),
-                priority: self.priority(),
-                template_key: "class_pace_faster",
-                params: TemplateParams::new(),
-            })
-        } else {
-            None
-        }
+        let ahead = current.class_car_ahead_last_lap?.as_secs_f64();
+        if my_avg < ahead * 0.99 {
+            Some(RuleEvent { rule_id: self.id(), priority: self.priority(),
+                template_key: "class_ahead_slower", params: TemplateParams::new() })
+        } else { None }
     }
 }
 
-impl Rule for ClassPaceSlowerRule {
-    fn id(&self) -> &'static str { "class_pace_slower" }
+impl Rule for ClassAheadFasterRule {
+    fn id(&self) -> &'static str { "class_ahead_faster" }
     fn priority(&self) -> Priority { Priority::Info }
     fn cooldown(&self) -> Duration { Duration::from_secs(120) }
     fn session_mask(&self) -> SessionMask { SessionMask::RACE }
     fn frequency_mask(&self) -> FrequencyMask { FrequencyMask::MEDIUM_AND_UP }
 
-    fn evaluate(&self, current: &EngineerState, _prev: Option<&EngineerState>) -> Option<RuleEvent> {
+    fn evaluate(&self, current: &EngineerState, prev: Option<&EngineerState>) -> Option<RuleEvent> {
+        let prev = prev?;
+        if !lap_just_completed(current, prev) { return None; }
         let my_avg = recent_avg_secs(current, 3)?;
-        let rivals_avg = current.class_rivals_avg_last_lap?.as_secs_f64();
-        if my_avg > rivals_avg * 1.02 {
-            Some(RuleEvent {
-                rule_id: self.id(),
-                priority: self.priority(),
-                template_key: "class_pace_slower",
-                params: TemplateParams::new(),
-            })
-        } else {
-            None
-        }
+        let ahead = current.class_car_ahead_last_lap?.as_secs_f64();
+        if my_avg > ahead * 1.01 {
+            Some(RuleEvent { rule_id: self.id(), priority: self.priority(),
+                template_key: "class_ahead_faster", params: TemplateParams::new() })
+        } else { None }
+    }
+}
+
+impl Rule for ClassBehindFasterRule {
+    fn id(&self) -> &'static str { "class_behind_faster" }
+    fn priority(&self) -> Priority { Priority::Info }
+    fn cooldown(&self) -> Duration { Duration::from_secs(120) }
+    fn session_mask(&self) -> SessionMask { SessionMask::RACE }
+    fn frequency_mask(&self) -> FrequencyMask { FrequencyMask::MEDIUM_AND_UP }
+
+    fn evaluate(&self, current: &EngineerState, prev: Option<&EngineerState>) -> Option<RuleEvent> {
+        let prev = prev?;
+        if !lap_just_completed(current, prev) { return None; }
+        let my_avg = recent_avg_secs(current, 3)?;
+        let behind = current.class_car_behind_last_lap?.as_secs_f64();
+        if behind < my_avg * 0.99 {
+            Some(RuleEvent { rule_id: self.id(), priority: self.priority(),
+                template_key: "class_behind_faster", params: TemplateParams::new() })
+        } else { None }
+    }
+}
+
+impl Rule for ClassBehindSlowerRule {
+    fn id(&self) -> &'static str { "class_behind_slower" }
+    fn priority(&self) -> Priority { Priority::Info }
+    fn cooldown(&self) -> Duration { Duration::from_secs(120) }
+    fn session_mask(&self) -> SessionMask { SessionMask::RACE }
+    fn frequency_mask(&self) -> FrequencyMask { FrequencyMask::MEDIUM_AND_UP }
+
+    fn evaluate(&self, current: &EngineerState, prev: Option<&EngineerState>) -> Option<RuleEvent> {
+        let prev = prev?;
+        if !lap_just_completed(current, prev) { return None; }
+        let my_avg = recent_avg_secs(current, 3)?;
+        let behind = current.class_car_behind_last_lap?.as_secs_f64();
+        if behind > my_avg * 1.01 {
+            Some(RuleEvent { rule_id: self.id(), priority: self.priority(),
+                template_key: "class_behind_slower", params: TemplateParams::new() })
+        } else { None }
     }
 }
 
@@ -202,5 +264,118 @@ impl Rule for SessionBestOvertakenRule {
             template_key: "session_best_overtaken",
             params: TemplateParams::new(),
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::VecDeque;
+    use std::time::Instant;
+    use crate::race_engineer::state::{
+        CarClass, DamageState, EngineerState, FlagState, PitState, SessionPhase, SessionType,
+    };
+
+    fn make_state(laps_secs: &[u64], best_secs: u64) -> EngineerState {
+        let recent = laps_secs.iter().map(|&s| Duration::from_secs(s)).collect::<VecDeque<_>>();
+        let last_lap = laps_secs.last().map(|&s| Duration::from_secs(s));
+        EngineerState {
+            tick_time: Instant::now(),
+            session_type: SessionType::Practice,
+            session_phase: SessionPhase::Green,
+            time_remaining: None,
+            laps_remaining: None,
+            total_laps_driven: laps_secs.len() as u32,
+            player_position: 1,
+            player_class_position: 1,
+            player_class: CarClass::Unknown,
+            player_lap: laps_secs.len() as u32 + 1,
+            in_pit: false,
+            in_garage: false,
+            pit_state: PitState::None,
+            fuel_remaining_l: 50.0,
+            fuel_laps_left: 10.0,
+            ve_laps_left: f32::INFINITY,
+            effective_laps_left: 10.0,
+            last_lap_time: last_lap,
+            best_lap_time_personal: Some(Duration::from_secs(best_secs)),
+            best_lap_time_session: None,
+            current_lap_time: Duration::ZERO,
+            last_sector_deltas: [None; 3],
+            recent_lap_times: recent,
+            gap_ahead: None,
+            gap_behind: None,
+            active_flags: FlagState::default(),
+            tire_temps_c: [80.0; 4],
+            tire_wear_pct: [1.0; 4],
+            damage: DamageState::default(),
+            ambient_temp_c: 20.0,
+            track_temp_c: 25.0,
+            rain_intensity: 0.0,
+            num_penalties: 0,
+            class_rivals_avg_last_lap: None,
+            class_rivals_min_best_lap: None,
+            class_car_ahead_last_lap: None,
+            class_car_behind_last_lap: None,
+        }
+    }
+
+    /// Simulate a lap completion: prev has N laps, current has N+1 laps (new lap appended).
+    fn with_new_lap(prev_laps: &[u64], new_lap: u64, best_secs: u64) -> (EngineerState, EngineerState) {
+        let prev = make_state(prev_laps, best_secs);
+        let mut new_laps = prev_laps.to_vec();
+        new_laps.push(new_lap);
+        let current = make_state(&new_laps, best_secs);
+        (prev, current)
+    }
+
+    #[test]
+    fn pb_lap_suppresses_pace_dropping() {
+        // Last lap IS the PB — rule must stay silent
+        let (prev, current) = with_new_lap(&[93, 92], 89, 89);
+        // The new lap appended is 89 == PB
+        assert!(PaceDroppingRule.evaluate(&current, Some(&prev)).is_none());
+    }
+
+    #[test]
+    fn near_pb_lap_suppresses_pace_dropping() {
+        // Last lap is 89.5s, PB is 89s — within 0.5% → suppress
+        let prev = make_state(&[93, 92], 89);
+        let mut current = make_state(&[93, 92, 89], 89); // 89s == best; let's use 89 (~0%)
+        // Simulate "almost PB": set last lap to Duration::from_millis(89_400) < 89 * 1.005 = 89.445
+        current.recent_lap_times.pop_back();
+        current.recent_lap_times.push_back(Duration::from_millis(89_400));
+        current.last_lap_time = Some(Duration::from_millis(89_400));
+        assert!(PaceDroppingRule.evaluate(&current, Some(&prev)).is_none());
+    }
+
+    #[test]
+    fn outlier_lap_filtered_prevents_false_positive() {
+        // recent laps: [90, 150, 91] — 150s is an out-lap outlier (>89*1.10=97.9)
+        // Without filter: avg = 110.3 > 89*1.02 = 90.78 → would fire. With filter: only 2 valid → skip.
+        let (prev, current) = with_new_lap(&[90, 150], 91, 89);
+        assert!(PaceDroppingRule.evaluate(&current, Some(&prev)).is_none());
+    }
+
+    #[test]
+    fn genuine_pace_drop_fires() {
+        // Three consistently slow laps, no outliers, last lap not near PB → must fire
+        let (prev, current) = with_new_lap(&[93, 92], 94, 89);
+        // avg of [93, 92, 94] = 93 > 89 * 1.02 = 90.78, last lap 94 > 89 * 1.005 = 89.445
+        assert!(PaceDroppingRule.evaluate(&current, Some(&prev)).is_some());
+    }
+
+    #[test]
+    fn mid_lap_does_not_fire() {
+        // current and prev have the same recent_lap_times.back() → no lap completed → skip
+        let state = make_state(&[93, 92, 94], 89);
+        let prev = state.clone();
+        assert!(PaceDroppingRule.evaluate(&state, Some(&prev)).is_none());
+    }
+
+    #[test]
+    fn no_prev_does_not_fire() {
+        let state = make_state(&[93, 92, 94], 89);
+        assert!(PaceDroppingRule.evaluate(&state, None).is_none());
     }
 }

@@ -72,7 +72,7 @@ pub struct rF2Wheel {
     pub mGripFract: f64,                     // fraction of patch that is sliding (0-1)
     pub mPressure: f64,                      // kPa tire air pressure
     pub mTemperature: [f64; 3],              // Kelvin: left/center/right
-    pub mWear: f64,                          // 0.0 (new) – 1.0 (destroyed)
+    pub mWear: f64,                          // 1.0 (new) – 0.0 (destroyed) [LMU convention; inverted vs. rF2 plugin docs]
     pub mTerrainName: [u8; 16],              // material prefix from TDF
     pub mSurfaceType: u8,                    // 0=dry,1=wet,2=grass,3=dirt,4=gravel,5=rumble,6=special
     pub mFlat: u8,                           // 1 if flat

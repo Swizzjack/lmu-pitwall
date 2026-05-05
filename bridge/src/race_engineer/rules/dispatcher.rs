@@ -102,7 +102,11 @@ impl RuleDispatcher {
             if !rule.frequency_mask().contains(freq_mask) {
                 continue;
             }
-            // Mute all non-Critical callouts while the car is physically in the pits
+            // In garage stall: mute everything — the driver is not on track yet.
+            if current.in_garage {
+                continue;
+            }
+            // On pit lane: mute non-Critical only.
             if current.in_pit && rule.priority() != Priority::Critical {
                 continue;
             }
@@ -201,17 +205,25 @@ pub fn build_default_rules() -> Vec<Box<dyn Rule>> {
         Box::new(PaceDroppingRule),
         Box::new(SectorDeltaRule),
         Box::new(SessionBestOvertakenRule),
-        Box::new(ClassPaceFasterRule),
-        Box::new(ClassPaceSlowerRule),
+        Box::new(ClassAheadSlowerRule),
+        Box::new(ClassAheadFasterRule),
+        Box::new(ClassBehindFasterRule),
+        Box::new(ClassBehindSlowerRule),
         Box::new(ClassBestLapRule),
 
         // Tires
         Box::new(TireTempsOutOfRangeRule),
         Box::new(TireTempsInRangeRule),
+        Box::new(TireWear50Rule),
+        Box::new(TireWear75Rule),
+        Box::new(TireWear90Rule),
 
         // Weather
         Box::new(RainStartingRule),
         Box::new(RainClearingRule),
         Box::new(TrackDryingRule),
+        Box::new(RainEscalationRule),
+        Box::new(AmbientTempChangeRule::new()),
+        Box::new(TrackTempChangeRule::new()),
     ]
 }

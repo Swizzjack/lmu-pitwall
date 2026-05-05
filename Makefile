@@ -30,6 +30,7 @@ build-release: build-dashboard build-bridge
 	@echo "Release complete → $(DIST_DIR)/lmu-pitwall.exe"
 
 ## Prepare dist/ for HTTP distribution (installer bundle + tar archive)
+## Installer build requires: sudo dnf install wine && ./scripts/install-innosetup.sh
 prepare-dist:
 	@echo "=== Bumping version ==="
 	@python3 scripts/bump-version.py
@@ -38,9 +39,18 @@ prepare-dist:
 	@echo "=== Preparing distribution ==="
 	@mkdir -p $(DIST_DIR)/installer
 	@cp installer/lmu-pitwall-installer.iss $(DIST_DIR)/installer/
-	@cp installer/config.json $(DIST_DIR)/installer/
 	@cp $(DIST_DIR)/lmu-pitwall.exe $(DIST_DIR)/installer/
-	@VER=$$(cat VERSION) && printf '@echo off\r\necho Building LMU Pitwall Installer...\r\necho.\r\n"C:\\Program Files (x86)\\Inno Setup 6\\ISCC.exe" "%%~dp0installer\\lmu-pitwall-installer.iss"\r\nif errorlevel 1 (\r\n    echo.\r\n    echo ERROR: Inno Setup not found.\r\n    echo Please install Inno Setup 6 from: https://jrsoftware.org/isdl.php\r\n    pause\r\n    exit /b 1\r\n)\r\necho.\r\necho Done! Installer created: installer\\LMU-Dashboard-Setup-%s.exe\r\necho.\r\npause\r\n' "$$VER" > $(DIST_DIR)/build-installer.bat
+	@VER=$$(cat VERSION) && printf '@echo off\r\necho Building LMU Pitwall Installer...\r\necho.\r\n"C:\\Program Files (x86)\\Inno Setup 6\\ISCC.exe" "%%~dp0installer\\lmu-pitwall-installer.iss"\r\nif errorlevel 1 (\r\n    echo.\r\n    echo ERROR: Inno Setup not found.\r\n    echo Please install Inno Setup 6 from: https://jrsoftware.org/isdl.php\r\n    pause\r\n    exit /b 1\r\n)\r\necho.\r\necho Done! Installer created: installer\\LMU-Pitwall-Setup-%s.exe\r\necho.\r\npause\r\n' "$$VER" > $(DIST_DIR)/build-installer.bat
+	@ISCC="$$HOME/.wine/drive_c/Program Files (x86)/Inno Setup 6/ISCC.exe"; \
+	 VER=$$(cat VERSION); \
+	 if command -v wine >/dev/null 2>&1 && [ -f "$$ISCC" ]; then \
+	   echo "=== Building Inno Setup installer (Wine) ==="; \
+	   cd $(DIST_DIR)/installer && WINEDEBUG=-all wine "$$ISCC" lmu-pitwall-installer.iss; \
+	   echo "  Installer created: installer/LMU-Pitwall-Setup-$$VER.exe"; \
+	 else \
+	   echo "  Skipping installer (wine/Inno Setup not found)."; \
+	   echo "  Run: sudo dnf install wine && ./scripts/install-innosetup.sh"; \
+	 fi
 	@cd $(DIST_DIR) && tar czf lmu-pitwall-dist.tar.gz lmu-pitwall.exe installer/ build-installer.bat
 	@echo ""
 	@echo "============================================"

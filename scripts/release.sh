@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
-# LMU Pitwall — release script (replaces: make prepare-dist && make serve)
+# LMU Pitwall — release script
 # Usage: ./scripts/release.sh [--no-bump] [--no-serve] [--no-installer] [--port 8080]
+#
+# Installer build requires Wine + Inno Setup 6 (one-time setup):
+#   sudo dnf install wine   # or: sudo apt install wine
+#   ./scripts/install-innosetup.sh
 set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -12,8 +16,7 @@ PORT=8080
 BUMP=true
 SERVE=true
 INSTALLER=true
-ISCC="C:\\Program Files (x86)\\Inno Setup 6\\ISCC.exe"
-POWERSHELL="/mnt/c/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"
+ISCC_WINE="$HOME/.wine/drive_c/Program Files (x86)/Inno Setup 6/ISCC.exe"
 
 # Parse args
 while [[ $# -gt 0 ]]; do
@@ -58,36 +61,35 @@ echo "=== Assembling dist/ ==="
 mkdir -p "$DIST_DIR/installer"
 cp "$BRIDGE_DIR/target/$TARGET/release/lmu-pitwall.exe" "$DIST_DIR/"
 cp installer/lmu-pitwall-installer.iss "$DIST_DIR/installer/"
-cp installer/config.json               "$DIST_DIR/installer/"
 cp "$DIST_DIR/lmu-pitwall.exe"         "$DIST_DIR/installer/"
 
 # build-installer.bat (Windows line endings)
 printf '@echo off\r\necho Building LMU Pitwall Installer...\r\necho.\r\n"C:\\Program Files (x86)\\Inno Setup 6\\ISCC.exe" "%%~dp0installer\\lmu-pitwall-installer.iss"\r\nif errorlevel 1 (\r\n    echo.\r\n    echo ERROR: Inno Setup not found.\r\n    echo Please install Inno Setup 6 from: https://jrsoftware.org/isdl.php\r\n    pause\r\n    exit /b 1\r\n)\r\necho.\r\necho Done! Installer created: installer\\LMU-Pitwall-Setup-%s.exe\r\necho.\r\npause\r\n' \
   "$VER" > "$DIST_DIR/build-installer.bat"
 
-# ── 5. Build Inno Setup installer (.exe) ───────────────────────────────────
+# ── 5. Build Inno Setup installer (.exe) via Wine ──────────────────────────
 SETUP_EXE=""
 if $INSTALLER; then
   echo ""
-  echo "=== Building Inno Setup installer ==="
-  WIN_ISS=$(wslpath -w "$DIST_DIR/installer/lmu-pitwall-installer.iss")
-  if "$POWERSHELL" -NoProfile -NonInteractive \
-      -Command "& { & '$ISCC' '$WIN_ISS'; exit \$LASTEXITCODE }" 2>&1; then
+  echo "=== Building Inno Setup installer (Wine) ==="
+  if ! command -v wine >/dev/null 2>&1; then
+    echo "  WARNING: wine not installed — skipping installer."
+    echo "  Install: sudo dnf install wine && ./scripts/install-innosetup.sh"
+    INSTALLER=false
+  elif [[ ! -f "$ISCC_WINE" ]]; then
+    echo "  WARNING: Inno Setup not found under Wine — skipping installer."
+    echo "  Run: ./scripts/install-innosetup.sh"
+    INSTALLER=false
+  else
+    ( cd "$DIST_DIR/installer" && \
+      WINEDEBUG=-all wine "$ISCC_WINE" "lmu-pitwall-installer.iss" )
     SETUP_EXE="$DIST_DIR/installer/LMU-Pitwall-Setup-${VER}.exe"
     echo "  Installer created: installer/LMU-Pitwall-Setup-${VER}.exe"
-  else
-    echo "  WARNING: Inno Setup build failed (ISCC not found or error)."
-    echo "  Run dist/build-installer.bat on Windows to create the installer manually."
-    INSTALLER=false
   fi
 fi
 
 cd "$DIST_DIR"
-if [[ -n "$SETUP_EXE" && -f "$SETUP_EXE" ]]; then
-  tar czf lmu-pitwall-dist.tar.gz lmu-pitwall.exe installer/ build-installer.bat
-else
-  tar czf lmu-pitwall-dist.tar.gz lmu-pitwall.exe installer/ build-installer.bat
-fi
+tar czf lmu-pitwall-dist.tar.gz lmu-pitwall.exe installer/ build-installer.bat
 cd "$REPO_DIR"
 
 EXE_SIZE=$(du -h "$DIST_DIR/lmu-pitwall.exe" | cut -f1)
@@ -110,7 +112,6 @@ echo "============================================"
 
 # ── 6. HTTP server ─────────────────────────────────────────────────────────
 if $SERVE; then
-  # Get WSL host IP for convenient download URL
   HOST_IP=$(ip route show default 2>/dev/null | awk '{print $3; exit}')
   echo ""
   echo "  HTTP server starting on port $PORT"

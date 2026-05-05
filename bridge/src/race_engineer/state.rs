@@ -143,6 +143,7 @@ pub struct EngineerState {
     pub player_class: CarClass,
     pub player_lap: u32,
     pub in_pit: bool,
+    pub in_garage: bool,
     pub pit_state: PitState,
 
     // Fuel / VE
@@ -192,6 +193,10 @@ pub struct EngineerState {
     pub class_rivals_avg_last_lap: Option<Duration>,
     /// Fastest best-lap-time among class rivals; None if no rivals with timed laps
     pub class_rivals_min_best_lap: Option<Duration>,
+    /// Last lap time of the class car directly ahead (within 10 s, same lap); None if none nearby
+    pub class_car_ahead_last_lap: Option<Duration>,
+    /// Last lap time of the class car directly behind (within 10 s, same lap); None if none nearby
+    pub class_car_behind_last_lap: Option<Duration>,
 }
 
 impl EngineerState {
@@ -353,6 +358,7 @@ impl StateAggregator {
         let total_laps_driven = player_sc.map(|v| v.mTotalLaps as u32).unwrap_or(0);
         let player_position = player_sc.map(|v| v.mPlace as u32).unwrap_or(0);
         let in_pit = player_sc.map(|v| v.mInPits != 0).unwrap_or(false);
+        let in_garage = player_sc.map(|v| v.mInGarageStall != 0).unwrap_or(false);
         let pit_state = player_sc.map(|v| PitState::from_u8(v.mPitState)).unwrap_or(PitState::None);
 
         // Laps remaining: valid only in lap-limited sessions
@@ -533,11 +539,13 @@ impl StateAggregator {
             (v.mWheels[3].mTemperature[1] - 273.15) as f32,
         ]).unwrap_or([0.0; 4]);
 
+        // LMU reports mWear as remaining grip (1.0 = new, 0.0 = destroyed),
+        // opposite of the rF2 plugin docs. Invert so tire_wear_pct is wear (0 = fresh, 1 = worn).
         let tire_wear_pct = player_tel.map(|v| [
-            v.mWheels[0].mWear as f32,
-            v.mWheels[1].mWear as f32,
-            v.mWheels[2].mWear as f32,
-            v.mWheels[3].mWear as f32,
+            (1.0 - v.mWheels[0].mWear as f32).clamp(0.0, 1.0),
+            (1.0 - v.mWheels[1].mWear as f32).clamp(0.0, 1.0),
+            (1.0 - v.mWheels[2].mWear as f32).clamp(0.0, 1.0),
+            (1.0 - v.mWheels[3].mWear as f32).clamp(0.0, 1.0),
         ]).unwrap_or([0.0; 4]);
 
         // --- Damage ---
@@ -562,21 +570,48 @@ impl StateAggregator {
         let num_penalties = player_sc.map(|v| v.mNumPenalties.max(0) as u32).unwrap_or(0);
 
         // --- Class rivals pace ---
-        let (class_rivals_avg_last_lap, class_rivals_min_best_lap) = sc.map(|s| {
+        let player_time_behind_leader = player_sc.map(|v| v.mTimeBehindLeader).unwrap_or(0.0);
+        let player_laps_behind_leader = player_sc.map(|v| v.mLapsBehindLeader).unwrap_or(0);
+        let (class_rivals_avg_last_lap, class_rivals_min_best_lap,
+             class_car_ahead_last_lap, class_car_behind_last_lap) = sc.map(|s| {
             let player_class_name = player_sc
                 .map(|v| &v.mVehicleClass[..])
                 .unwrap_or(&[]);
-            let rivals = s.mVehicles[..num_sc]
-                .iter()
-                .filter(|v| v.mIsPlayer == 0 && v.mVehicleClass[..] == *player_class_name);
             let mut last_lap_sum = 0.0f64;
             let mut last_lap_count = 0usize;
             let mut min_best: Option<f64> = None;
-            for v in rivals {
-                if v.mLastLapTime > 0.0 {
+            // 0 = not found (mPlace is 1-based), u32::MAX = not found
+            let mut ahead_place: u32 = 0;
+            let mut ahead_last_lap: f64 = 0.0;
+            let mut behind_place: u32 = u32::MAX;
+            let mut behind_last_lap: f64 = 0.0;
+            for v in s.mVehicles[..num_sc].iter()
+                .filter(|v| v.mIsPlayer == 0 && v.mVehicleClass[..] == *player_class_name)
+            {
+                let in_pits = v.mInPits != 0;
+                let same_lap = v.mLapsBehindLeader == player_laps_behind_leader;
+                let gap_to_player = (v.mTimeBehindLeader - player_time_behind_leader).abs();
+                let v_place = v.mPlace as u32;
+                let has_valid_lap = v.mLastLapTime > 0.0 && v.mBestLapTime > 0.0
+                    && v.mLastLapTime <= v.mBestLapTime * 1.10;
+                let proximity_ok = !in_pits && total_laps_driven >= 1
+                    && v.mTotalLaps >= 1 && same_lap && gap_to_player <= 10.0;
+
+                if proximity_ok && has_valid_lap {
                     last_lap_sum += v.mLastLapTime;
                     last_lap_count += 1;
+                    // Car directly ahead: largest mPlace still below player's overall position
+                    if v_place < player_position && v_place > ahead_place {
+                        ahead_place = v_place;
+                        ahead_last_lap = v.mLastLapTime;
+                    }
+                    // Car directly behind: smallest mPlace still above player's overall position
+                    if v_place > player_position && v_place < behind_place {
+                        behind_place = v_place;
+                        behind_last_lap = v.mLastLapTime;
+                    }
                 }
+                // min_best: unrestricted — covers all class rivals regardless of proximity
                 if v.mBestLapTime > 0.0 {
                     min_best = Some(match min_best {
                         Some(m) => m.min(v.mBestLapTime),
@@ -584,13 +619,15 @@ impl StateAggregator {
                     });
                 }
             }
-            let avg = if last_lap_count > 0 {
+            let avg = if last_lap_count >= 2 {
                 Some(Duration::from_secs_f64(last_lap_sum / last_lap_count as f64))
             } else {
                 None
             };
-            (avg, min_best.map(Duration::from_secs_f64))
-        }).unwrap_or((None, None));
+            let ahead = if ahead_place > 0 { Some(Duration::from_secs_f64(ahead_last_lap)) } else { None };
+            let behind = if behind_place < u32::MAX { Some(Duration::from_secs_f64(behind_last_lap)) } else { None };
+            (avg, min_best.map(Duration::from_secs_f64), ahead, behind)
+        }).unwrap_or((None, None, None, None));
 
         EngineerState {
             tick_time: now,
@@ -604,6 +641,7 @@ impl StateAggregator {
             player_class,
             player_lap,
             in_pit,
+            in_garage,
             pit_state,
             fuel_remaining_l,
             fuel_laps_left,
@@ -627,6 +665,8 @@ impl StateAggregator {
             num_penalties,
             class_rivals_avg_last_lap,
             class_rivals_min_best_lap,
+            class_car_ahead_last_lap,
+            class_car_behind_last_lap,
         }
     }
 }
