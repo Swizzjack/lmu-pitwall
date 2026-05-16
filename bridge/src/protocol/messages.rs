@@ -71,8 +71,9 @@ pub struct DriverLapSnapshot {
     pub tire_compound_rear_name: String,
     pub wheels: [WheelSnapshot; 4], // FL, FR, RL, RR
     pub lap_start_et: f64,
-    pub speed_ms: f64,       // speed at S/F crossing (m/s)
-    pub has_telemetry: bool, // false = scoring data only, no per-wheel data
+    pub speed_ms: f64,          // speed at S/F crossing (m/s)
+    pub has_telemetry: bool,    // false = scoring data only, no per-wheel data
+    pub dent_severity: [u8; 8], // 0=none, 1=dented, 2=very dented (8 body zones)
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -208,6 +209,10 @@ pub enum ServerMessage {
         last_impact_et: f64,        // session time of last collision
         tire_flat: [bool; 4],       // FL, FR, RL, RR — flat tyre
         tire_detached: [bool; 4],   // FL, FR, RL, RR — detached tyre
+        // --- Wearables (from REST API /rest/garage/UIScreen/RepairAndRefuel) ---
+        aero_damage: f64,            // aero body damage 0.0–1.0; -1.0 = unavailable
+        brake_wear: [f64; 4],        // FL, FR, RL, RR brake wear 0.0–1.0; -1.0 = unavailable
+        suspension_damage: [f64; 4], // FL, FR, RL, RR suspension damage 0.0–1.0; -1.0 = unavailable
         // --- Race flags (from scoring + rules buffers) ---
         yellow_flag_state: i32, // rF2 enum: -1=no scoring, 0=none, 1=pending, 2=pits closed, 3=pit lead lap, 4=pits open, 5=last lap, 6=resume, 7=race halt
         sector_flags: [i32; 3], // local yellow per sector (S1, S2, S3): 0=clear, >0=yellow

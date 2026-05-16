@@ -49,6 +49,8 @@ pub struct WebSocketServer {
     all_drivers_rx: watch::Receiver<Option<ServerMessage>>,
     /// Latest VersionInfo — sent immediately to newly connecting clients.
     version_info_rx: watch::Receiver<Option<ServerMessage>>,
+    /// Latest ConnectionStatus — sent immediately to newly connecting clients.
+    connection_status_rx: watch::Receiver<Option<ServerMessage>>,
     engineer_service: Arc<RaceEngineerService>,
 }
 
@@ -57,6 +59,7 @@ impl WebSocketServer {
         port: u16,
         all_drivers_rx: watch::Receiver<Option<ServerMessage>>,
         version_info_rx: watch::Receiver<Option<ServerMessage>>,
+        connection_status_rx: watch::Receiver<Option<ServerMessage>>,
         engineer_service: Arc<RaceEngineerService>,
     ) -> Self {
         let (tx, _) = broadcast::channel(BROADCAST_CAPACITY);
@@ -70,6 +73,7 @@ impl WebSocketServer {
             count_tx,
             all_drivers_rx,
             version_info_rx,
+            connection_status_rx,
             engineer_service,
         }
     }
@@ -120,6 +124,7 @@ impl WebSocketServer {
             self.count_tx.clone(),
             self.all_drivers_rx.clone(),
             self.version_info_rx.clone(),
+            self.connection_status_rx.clone(),
             self.tx.clone(),
             self.audio_tx.clone(),
             self.engineer_service.clone(),
@@ -140,6 +145,7 @@ async fn handle_client(
     count_tx: watch::Sender<usize>,
     all_drivers_rx: watch::Receiver<Option<ServerMessage>>,
     version_info_rx: watch::Receiver<Option<ServerMessage>>,
+    connection_status_rx: watch::Receiver<Option<ServerMessage>>,
     ws_broadcaster: broadcast::Sender<Arc<ServerMessage>>,
     _audio_broadcaster: broadcast::Sender<Arc<ServerMessage>>,
     engineer_service: Arc<RaceEngineerService>,
@@ -193,6 +199,17 @@ async fn handle_client(
     // Send the latest VersionInfo immediately on connect (if check has completed).
     {
         let latest = version_info_rx.borrow().clone();
+        if let Some(msg) = latest {
+            if let Ok(ws_msg) = serialize(&msg, fmt) {
+                let _ = sink.send(ws_msg).await;
+            }
+        }
+    }
+
+    // Send the latest ConnectionStatus immediately on connect so the frontend
+    // never shows "Waiting" when the game was already running before connect.
+    {
+        let latest = connection_status_rx.borrow().clone();
         if let Some(msg) = latest {
             if let Ok(ws_msg) = serialize(&msg, fmt) {
                 let _ = sink.send(ws_msg).await;
