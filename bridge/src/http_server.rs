@@ -31,7 +31,7 @@ pub async fn run(ws: Arc<WebSocketServer>, port: u16) -> Result<()> {
             Ok((stream, peer)) => {
                 let ws = ws.clone();
                 tokio::spawn(async move {
-                    handle_connection(stream, peer, ws).await;
+                    handle_connection(stream, peer, ws, port).await;
                 });
             }
             Err(e) => {
@@ -41,7 +41,7 @@ pub async fn run(ws: Arc<WebSocketServer>, port: u16) -> Result<()> {
     }
 }
 
-async fn handle_connection(stream: TcpStream, peer: SocketAddr, ws: Arc<WebSocketServer>) {
+async fn handle_connection(stream: TcpStream, peer: SocketAddr, ws: Arc<WebSocketServer>, port: u16) {
     // Peek without consuming so the WS handshake can re-read the same bytes.
     let mut buf = [0u8; 4096];
     let n = match stream.peek(&mut buf).await {
@@ -58,7 +58,7 @@ async fn handle_connection(stream: TcpStream, peer: SocketAddr, ws: Arc<WebSocke
         // WebSocket upgrade — tokio-tungstenite will re-read the request.
         ws.accept_client(stream, peer);
     } else {
-        if let Err(e) = handle_http(stream).await {
+        if let Err(e) = handle_http(stream, port).await {
             debug!("HTTP handler error from {}: {}", peer, e);
         }
     }
@@ -68,7 +68,7 @@ async fn handle_connection(stream: TcpStream, peer: SocketAddr, ws: Arc<WebSocke
 // Minimal HTTP/1.1 static-file handler
 // ---------------------------------------------------------------------------
 
-async fn handle_http(mut stream: TcpStream) -> Result<()> {
+async fn handle_http(mut stream: TcpStream, port: u16) -> Result<()> {
     // Read until end of HTTP headers (\r\n\r\n).
     let mut request = Vec::with_capacity(2048);
     let mut buf = [0u8; 4096];
@@ -112,6 +112,17 @@ async fn handle_http(mut stream: TcpStream) -> Result<()> {
     }
 
     // API routes
+    if path == "/api/network-info" {
+        let ip = get_local_ip().unwrap_or_else(|| "unknown".to_string());
+        let body = format!(r#"{{"ip":"{}","port":{}}}"#, ip, port);
+        let cors = [
+            ("Access-Control-Allow-Origin", "*"),
+            ("Access-Control-Allow-Methods", "GET, OPTIONS"),
+        ];
+        send_response(&mut stream, 200, "application/json", body.as_bytes(), &cors).await?;
+        return Ok(());
+    }
+
     if path == "/api/version" {
         let body = format!(r#"{{"version":"{}"}}"#, env!("CARGO_PKG_VERSION"));
         let cors = [
@@ -185,6 +196,16 @@ async fn serve_static(stream: &mut TcpStream, path: &str) -> Result<()> {
             send_response(stream, 404, "text/plain", b"Not Found", &cors).await
         }
     }
+}
+
+/// Returns the primary LAN IPv4 address by probing a UDP socket.
+/// No packets are actually sent — connect() on a UDP socket just sets the routing destination.
+fn get_local_ip() -> Option<String> {
+    use std::net::UdpSocket;
+    let socket = UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("8.8.8.8:80").ok()?;
+    let addr = socket.local_addr().ok()?;
+    Some(addr.ip().to_string())
 }
 
 fn mime_type(path: &str) -> &'static str {

@@ -1,9 +1,41 @@
-import { useCallback } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useLayoutStore, LAYOUT_PRESETS } from '../stores/layoutStore'
 import { useTelemetryStore } from '../stores/telemetryStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { WIDGET_REGISTRY } from './widgetRegistry'
 import { colors, fonts } from '../styles/theme'
+
+function NetworkBadge() {
+  const { wsHost, wsPort } = useSettingsStore()
+  const [address, setAddress] = useState<string | null>(null)
+
+  useEffect(() => {
+    const host = wsHost.trim() || window.location.hostname
+    fetch(`http://${host}:${wsPort}/api/network-info`)
+      .then((r) => r.json())
+      .then((data: { ip: string; port: number }) => setAddress(`${data.ip}:${data.port}`))
+      .catch(() => {})
+  }, [wsHost, wsPort])
+
+  if (!address) return null
+
+  return (
+    <span
+      title="Tablet-Adresse: Diese IP im Browser des Tablets eingeben"
+      style={{
+        fontFamily: fonts.body,
+        fontSize: 13,
+        color: colors.textMuted,
+        letterSpacing: 0.3,
+        userSelect: 'text',
+        cursor: 'text',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      {address}
+    </span>
+  )
+}
 
 function UpdateBadge() {
   const versionInfo = useTelemetryStore((s) => s.versionInfo)
@@ -180,6 +212,11 @@ export default function Toolbar({ onOpenSettings, onOpenResults, onOpenFuel, onO
 
       {/* Settings */}
       <ToolbarBtn onClick={onOpenSettings} title="Settings">⚙</ToolbarBtn>
+
+      <div style={{ width: 1, height: 27, background: colors.border, margin: '0 2px' }} />
+
+      {/* Network address for tablet users */}
+      <NetworkBadge />
 
       <div style={{ width: 1, height: 27, background: colors.border, margin: '0 2px' }} />
 
