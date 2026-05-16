@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect } from 'react'
 import { useSettingsStore, SETTINGS_DEFAULTS } from '../stores/settingsStore'
-import type { FpsLimit, InputChartFps, SpeedUnit, TempUnit, PressureUnit, FuelUnit, ClockFormat } from '../stores/settingsStore'
+import type { FpsLimit, InputChartFps, SpeedUnit, TempUnit, PressureUnit, FuelUnit, ClockFormat, DamageDetail } from '../stores/settingsStore'
 import { colors, fonts } from '../styles/theme'
 
 interface Props {
@@ -298,6 +298,21 @@ export default function Settings({ open, onClose }: Props) {
                 value={s.timeWidgetShowCurrentLap ? 'on' : 'off'}
                 options={[{ value: 'on', label: 'On' }, { value: 'off', label: 'Off' }]}
                 onChange={(v) => s.update({ timeWidgetShowCurrentLap: v === 'on' })}
+              />
+            </Row>
+          </Section>
+
+          {/* Damage Widget */}
+          <Section title="Damage Widget">
+            <Row label="Detail Level">
+              <SegmentControl
+                value={s.damageDetail}
+                options={[
+                  { value: 'compact', label: 'Compact' },
+                  { value: 'medium', label: 'Medium' },
+                  { value: 'full', label: 'Full' },
+                ] as { value: DamageDetail; label: string }[]}
+                onChange={(v) => s.update({ damageDetail: v as DamageDetail })}
               />
             </Row>
           </Section>

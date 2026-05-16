@@ -1,4 +1,5 @@
 import { useTelemetryStore } from '../../stores/telemetryStore'
+import { useSettingsStore } from '../../stores/settingsStore'
 import { colors, fonts } from '../../styles/theme'
 import { SEV_PCT, DAMAGE_ZONES } from '../../utils/damage'
 
@@ -246,16 +247,119 @@ function TireStatusPanel({ flat, detached }: { flat: boolean[]; detached: boolea
 }
 
 // ---------------------------------------------------------------------------
+// SectionAvgRow — single averaged bar for medium mode
+// ---------------------------------------------------------------------------
+
+function SectionAvgRow({ title, values }: { title: string; values: number[] }) {
+  const valid = values.filter(v => v >= 0)
+  if (valid.length === 0) return null
+  const avgPct = Math.round(valid.reduce((s, v) => s + v, 0) / valid.length * 100)
+  return <BarRow label={title} pct={avgPct} labelWidth={52} />
+}
+
+// ---------------------------------------------------------------------------
+// CompactStats — worst tire stat row for compact mode
+// ---------------------------------------------------------------------------
+
+function CompactStats({ brakeWear }: { brakeWear: number[] }) {
+  const valid = brakeWear.filter(v => v >= 0)
+  if (valid.length === 0) return null
+  const worstPct = Math.round(Math.max(...valid) * 100)
+  const color = barColor(worstPct)
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+      <span style={{ fontFamily: fonts.body, fontSize: 12, color: colors.textMuted, letterSpacing: 1, textTransform: 'uppercase' }}>
+        Worst Tire
+      </span>
+      <span style={{ fontFamily: fonts.mono, fontSize: 13, color: worstPct === 0 ? colors.textMuted : color, fontWeight: 700 }}>
+        {worstPct}%
+      </span>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
 // Main widget
 // ---------------------------------------------------------------------------
 
 export default function VehicleStatus() {
-  const vs = useTelemetryStore((s) => s.vehicleStatus)
+  const vs           = useTelemetryStore((s) => s.vehicleStatus)
+  const damageDetail = useSettingsStore((s) => s.damageDetail)
 
   const anyTireDamage = vs.tire_flat.some(Boolean) || vs.tire_detached.some(Boolean)
   const aeroPct       = vs.aero_damage >= 0 ? vs.aero_damage * 100 : null
   const hasBrakeData  = vs.brake_wear.some(v => v >= 0)
   const hasSuspData   = vs.suspension_damage.some(v => v >= 0)
+
+  const diagram = (
+    <CarDiagram
+      dentSeverity={Array.from(vs.dent_severity)}
+      aeroPct={aeroPct}
+      lastImpact={vs.last_impact_magnitude}
+      overheating={vs.overheating}
+      anyDetached={vs.any_detached}
+    />
+  )
+
+  const tireAlerts = anyTireDamage && (
+    <>
+      <Divider />
+      <TireStatusPanel flat={Array.from(vs.tire_flat)} detached={Array.from(vs.tire_detached)} />
+    </>
+  )
+
+  let body: React.ReactNode
+
+  if (damageDetail === 'compact') {
+    body = (
+      <>
+        {diagram}
+        {hasBrakeData && (
+          <>
+            <Divider />
+            <CompactStats brakeWear={Array.from(vs.brake_wear)} />
+          </>
+        )}
+        {tireAlerts}
+      </>
+    )
+  } else if (damageDetail === 'medium') {
+    body = (
+      <>
+        {diagram}
+        {(hasBrakeData || hasSuspData) && (
+          <>
+            <Divider />
+            <SectionTitle label="Averages" />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 3 }}>
+              {hasBrakeData && <SectionAvgRow title="Brakes" values={Array.from(vs.brake_wear)} />}
+              {hasSuspData && <SectionAvgRow title="Susp" values={Array.from(vs.suspension_damage)} />}
+            </div>
+          </>
+        )}
+        {tireAlerts}
+      </>
+    )
+  } else {
+    body = (
+      <>
+        {diagram}
+        {hasBrakeData && (
+          <>
+            <Divider />
+            <WheelBarsPanel title="Brake Wear" values={Array.from(vs.brake_wear)} />
+          </>
+        )}
+        {hasSuspData && (
+          <>
+            <Divider />
+            <WheelBarsPanel title="Suspension" values={Array.from(vs.suspension_damage)} />
+          </>
+        )}
+        {tireAlerts}
+      </>
+    )
+  }
 
   return (
     <div style={{
@@ -268,34 +372,7 @@ export default function VehicleStatus() {
       boxSizing: 'border-box',
       overflowY: 'auto',
     }}>
-      <CarDiagram
-        dentSeverity={Array.from(vs.dent_severity)}
-        aeroPct={aeroPct}
-        lastImpact={vs.last_impact_magnitude}
-        overheating={vs.overheating}
-        anyDetached={vs.any_detached}
-      />
-
-      {hasBrakeData && (
-        <>
-          <Divider />
-          <WheelBarsPanel title="Brake Wear" values={Array.from(vs.brake_wear)} />
-        </>
-      )}
-
-      {hasSuspData && (
-        <>
-          <Divider />
-          <WheelBarsPanel title="Suspension" values={Array.from(vs.suspension_damage)} />
-        </>
-      )}
-
-      {anyTireDamage && (
-        <>
-          <Divider />
-          <TireStatusPanel flat={Array.from(vs.tire_flat)} detached={Array.from(vs.tire_detached)} />
-        </>
-      )}
+      {body}
     </div>
   )
 }
