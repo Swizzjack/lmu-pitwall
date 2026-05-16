@@ -8,6 +8,7 @@ export type FuelUnit = 'liters' | 'gallons'
 export type FpsLimit = 0 | 30 | 60
 export type InputChartFps = 60 | 30 | 15
 export type ClockFormat = '12h' | '24h'
+export type DamageDetail = 'compact' | 'medium' | 'full'
 
 export interface SettingsState {
   speedUnit: SpeedUnit
@@ -32,6 +33,8 @@ export interface SettingsState {
   standingsShowCompound: boolean
   standingsShowCarType: boolean
   standingsShowVE: boolean
+  // Damage Widget
+  damageDetail: DamageDetail
   // Post Race Results
   resultsPath: string
 }
@@ -75,6 +78,8 @@ export const SETTINGS_DEFAULTS: SettingsState = {
   standingsShowCompound: true,
   standingsShowCarType: true,
   standingsShowVE: true,
+  // Damage Widget
+  damageDetail: 'full',
   // Post Race Results
   resultsPath: '',
 }
@@ -91,10 +96,10 @@ export const useSettingsStore = create<SettingsStore>()(
       exportSettings: () => {
         const { speedUnit, tempUnit, pressureUnit, fuelUnit, lapReserve, wsHost, wsPort, primaryColor, accentColor, fpsLimit, inputChartFps,
           timeWidgetShowComputerTime, timeWidgetClockFormat, timeWidgetShowSessionElapsed, timeWidgetShowTimeRemaining, timeWidgetShowCurrentLap,
-          standingsShowCompound, standingsShowCarType, standingsShowVE, resultsPath } = get()
+          standingsShowCompound, standingsShowCarType, standingsShowVE, damageDetail, resultsPath } = get()
         return JSON.stringify({ speedUnit, tempUnit, pressureUnit, fuelUnit, lapReserve, wsHost, wsPort, primaryColor, accentColor, fpsLimit, inputChartFps,
           timeWidgetShowComputerTime, timeWidgetClockFormat, timeWidgetShowSessionElapsed, timeWidgetShowTimeRemaining, timeWidgetShowCurrentLap,
-          standingsShowCompound, standingsShowCarType, standingsShowVE, resultsPath }, null, 2)
+          standingsShowCompound, standingsShowCarType, standingsShowVE, damageDetail, resultsPath }, null, 2)
       },
 
       importSettings: (json) => {
@@ -120,6 +125,7 @@ export const useSettingsStore = create<SettingsStore>()(
           if (typeof data.standingsShowCompound === 'boolean') valid.standingsShowCompound = data.standingsShowCompound
           if (typeof data.standingsShowCarType === 'boolean') valid.standingsShowCarType = data.standingsShowCarType
           if (typeof data.standingsShowVE === 'boolean') valid.standingsShowVE = data.standingsShowVE
+          if (data.damageDetail === 'compact' || data.damageDetail === 'medium' || data.damageDetail === 'full') valid.damageDetail = data.damageDetail
           if (typeof data.resultsPath === 'string') valid.resultsPath = data.resultsPath
           set(valid)
           return true
