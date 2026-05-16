@@ -1,61 +1,35 @@
 # LMU Pitwall
 
-A real-time sim racing dashboard for [Le Mans Ultimate](https://www.lemansultimate.com/), designed to run on a second (or third, or fourth) monitor.
-
-Built with Rust and React. Runs as a single `.exe` — no installation required, no separate server.
+Real-time sim racing dashboard for [Le Mans Ultimate](https://www.lemansultimate.com/). Runs as a single `.exe` on your racing PC and serves the dashboard to any browser on the same network.
 
 ![LMU Pitwall Dashboard](docs/screenshots/Full.png)
 
-## Features
+## Install
 
-- **Fuel Manager** — Fuel remaining, consumption per lap (median rolling average), laps remaining, and fuel needed to finish. Excludes first lap of each stint for accurate data.
-- **Standings** — Live positions with car number, brand, gap to leader, sector times, and pit status indicator.
-- **Electronics** — TC, ABS, Engine Map, ARB, Regen, and Brake Migration with live max values. Reads directly from LMU v1.3 shared memory — no button configuration needed. Works in online sessions.
-- **Tires** — Temperatures (inner/middle/outer + carcass), pressures, wear percentage, and brake disc temps per corner.
-- **Flags** — Real-time race flag display (green, blue, yellow, red, chequered) with session-phase awareness.
-- **Time** — Current session time, time remaining, and lap counter.
-- **Track Map** — SVG-based live track map with vehicle positions, updated in real-time.
-- **Post Race Results** — Load any LMU session XML log file and view detailed race results: final classification, lap times, sector times, gaps, and pitstops for all drivers.
-- **Fuel Calculator** — Calculate the required fuel or virtual energy consumption based on the sessions already completed.
-- **Race Engineer** — monitors your telemetry and speaks relevant callouts during practice, qualifying, and race — flags, fuel, tires, and more. CrewChief-style but native to LMU.
-- **Drag & Drop Layout** — Arrange and resize widgets however you like. Layout is saved automatically.
+Download `LMU-Pitwall-Setup-X.X.X.exe` from the [latest release](https://github.com/Swizzjack/lmu-pitwall/releases), run the installer, start Le Mans Ultimate, then open the dashboard in any browser:
 
-## How It Works
+```
+http://<racing-pc-ip>:9000
+```
 
-LMU Pitwall reads telemetry data from the rF2 Shared Memory buffer that Le Mans Ultimate exposes, combined with LMU's built-in REST API (port 6397) for session data. A Rust backend processes the data and serves a React dashboard via an embedded web server — all in one `.exe`.
+No configuration required. A portable `lmu-pitwall.exe` (no installer) is also on the releases page.
 
-As of LMU v1.3, electronics values (TC, ABS, ARB, Engine Map, Brake Migration, Regen) are exposed directly in the shared memory telemetry struct, so no button-counting or garage API calls are required. The Electronics widget always shows current values — even in online sessions protected by EasyAntiCheat.
+## Shared Memory Plugin (Required)
 
-## Download
+LMU Pitwall reads telemetry via the [rF2 Shared Memory Map Plugin](https://github.com/TheIronWolfModding/rF2SharedMemoryMapPlugin) by TheIronWolf. This plugin is not bundled with LMU and must be installed once.
 
-Grab the latest release from the [Releases page](https://github.com/Swizzjack/lmu-pitwall/releases).
+**Step 1 — Install the DLL**
 
-**Option A: Installer** — Download `LMU-Pitwall-Setup-x.x.x.exe` and run it.
+Download `rFactor2SharedMemoryMapPlugin64.dll` from the plugin's latest release and place it at:
 
-**Option B: Portable** — Download `lmu-pitwall.exe`, place it anywhere, and run it.
-
-Shared Memory Plugin (Required)
-LMU Pitwall reads telemetry data via the rF2 Shared Memory Map Plugin by TheIronWolf. This is a third-party plugin that is not included with Le Mans Ultimate and must be installed manually.
-Check if the plugin is already installed:
-Navigate to your LMU installation folder and look for:
+```
 Le Mans Ultimate\Plugins\rFactor2SharedMemoryMapPlugin64.dll
-If the file exists, skip to step 3. If not, follow the full setup below.
-
-Step 1 — Install the plugin DLL
-Download rFactor2SharedMemoryMapPlugin64.dll from the latest release: https://github.com/TheIronWolfModding/rF2SharedMemoryMapPlugin/releases.
-Create a Plugins folder inside your LMU installation directory if it doesn't exist, and place the DLL there:
-Steam\steamapps\common\Le Mans Ultimate\
-└── Plugins\
-    └── rFactor2SharedMemoryMapPlugin64.dll
-    
-**Step 2 — Enable the plugin in the configuration file**
-
-Open (or create) the file `CustomPluginVariables.JSON` located at:
-```
-Le Mans Ultimate\UserData\player\CustomPluginVariables.JSON
 ```
 
-If the file is empty or does not contain an entry for the plugin, replace its contents with:
+**Step 2 — Enable in `CustomPluginVariables.JSON`**
+
+Open or create `Le Mans Ultimate\UserData\player\CustomPluginVariables.JSON` and add:
+
 ```json
 {
   "rFactor2SharedMemoryMapPlugin64.dll": {
@@ -73,72 +47,145 @@ If the file is empty or does not contain an entry for the plugin, replace its co
 }
 ```
 
-> **Note:** The space before `Enabled` (`" Enabled"`) is intentional — the rF2 plugin engine requires it.
+> The leading space in `" Enabled"` is required by the rF2 plugin engine.
 
-If the file already contains entries for other plugins, add the `rFactor2SharedMemoryMapPlugin64.dll` block alongside them.
+**Step 3 — Activate in-game**
 
-Step 3 — Activate in-game and restart
-
-Launch Le Mans Ultimate
-Go to Settings → Gameplay and make sure Enable Plugins is turned ON
-Restart Le Mans Ultimate — plugins only take effect after a restart
-
-After restarting, the shared memory buffers will be available and LMU Pitwall can read telemetry data.
+Settings → Gameplay → Enable Plugins → ON, then restart LMU. Plugins only take effect after a full restart.
 
 ## Usage
 
 1. Start Le Mans Ultimate
-2. Run LMU Pitwall
+2. Run `lmu-pitwall.exe`
 3. Open a session (Practice, Qualifying, or Race)
-4. The dashboard auto-connects and starts showing live data
+4. Open `http://<racing-pc-ip>:9000` in any browser on your local network
 
-The dashboard runs at `http://localhost:9000` by default. You can also open it on any device in your local network by navigating to `http://<your-pc-ip>:9000` in a browser (make sure Windows Firewall allows port 9000).
+The dashboard auto-connects and updates in real time. On first run, Windows Firewall may prompt you to allow port 9000.
 
-## Post Race Results
+## Features
 
-After a session, you can load the XML log file that LMU automatically saves to review detailed results:
+| Widget | Description |
+|--------|-------------|
+| **Fuel** | Fuel remaining, median consumption per lap (rolling average, excludes first lap of each stint), laps to empty, fuel needed to finish |
+| **Standings** | Live positions with car number, brand, gap to leader, sector times, pit status, and a MiniDamageGrid per car |
+| **VehicleStatus** | Damage overview at three detail levels: compact, medium, or full — covers aero, brakes, and suspension |
+| **Electronics** | TC, ABS, Engine Map, ARB, Regen, Brake Migration — read directly from shared memory, no button-counting; works in online sessions (EAC-protected) |
+| **Tires** | Temperatures (inner/middle/outer/carcass), pressures, wear %, and brake disc temps per corner |
+| **Race Engineer** | Spoken callouts during practice, qualifying, and race: tire wear warnings, weather escalations, pace deltas, fuel status, flag alerts |
+| **Strategy** | Virtual Energy (VE) per lap from LMU REST API; Fuel Calculator for multi-stint planning |
+| **Track Map** | SVG live track map with real-time vehicle positions |
+| **Weather** | Current and forecast conditions |
+| **Inputs** | Throttle, brake, and steering trace |
+| **Flags** | Real-time flag display (green, blue, yellow, red, chequered) with session-phase awareness |
+| **Time** | Session time, time remaining, lap counter |
+| **Post Race Results** | Load any LMU session XML to view full classification, lap times, sectors, gaps, and pitstop data |
+| **Toolbar** | Shows local IP and port for quick browser access from a second device |
 
-1. Open the Post Race Results view
-2. Select an XML session file (found in LMU's `UserData\Log\Results\` folder)
-3. Browse the full classification with lap times, sectors, gaps, and pitstop data
+Widget layout is drag-and-drop; positions and sizes are saved automatically.
+
+## Architecture
+
+```
+Le Mans Ultimate (Windows)
+├── rF2 Shared Memory  (~60 Hz telemetry)
+└── REST API  :6397
+    ├── GET /rest/strategy/usage                        (Virtual Energy history)
+    └── GET /rest/garage/UIScreen/RepairAndRefuel       (wearables: aero, brakes, suspension)
+
+lmu-pitwall.exe (Rust, single binary)
+├── Shared Memory reader ──────────────────────────────► WebSocket server :9000
+├── REST API client ───────────────────────────────────► WebSocket server :9000
+└── HTTP server :9000
+    ├── Upgrade: websocket  → WebSocket handler (live telemetry)
+    ├── GET /              → index.html  (React SPA entry)
+    ├── GET /assets/*      → hashed JS/CSS bundles (immutable cache)
+    ├── GET /api/network-info
+    ├── GET /api/version
+    └── POST /api/shutdown
+
+Browser (any device on LAN)
+├── ws://<ip>:9000   live telemetry stream
+└── http://<ip>:9000  React SPA (served from embedded rust-embed assets)
+```
+
+A single port handles both WebSocket upgrades and static file serving. The React bundle is embedded in the binary via `rust-embed` — no separate file deployment needed.
 
 ## Building from Source
 
-Requires: Rust (with cargo-zigbuild), Node.js, Zig 0.13+
+**Environment:** Bazzite (Fedora Atomic) or any Fedora-based system. A [distrobox](https://github.com/89luca89/distrobox) container works well for keeping the toolchain isolated.
+
+**One-time setup:**
 
 ```bash
-export PATH="$HOME/.local/bin:$PATH" && source ~/.cargo/env
+# Rust toolchain
+curl https://sh.rustup.rs -sSf | sh
+rustup target add x86_64-pc-windows-gnu
 
-# Install dependencies
+# cargo-zigbuild (cross-compilation, no MinGW needed)
+cargo install cargo-zigbuild
+# Zig 0.13+: https://ziglang.org/download/ or via dnf/distrobox
+
+# Node.js — use system package manager or https://nodejs.org
 cd dashboard && npm install && cd ..
-
-# Build release (standalone .exe)
-make build-release
 ```
 
-The output is a single `.exe` in `bridge/target/x86_64-pc-windows-gnu/release/`.
-
-### Full release with installer
-
-To also produce `LMU-Pitwall-Setup-x.x.x.exe`, install Wine and Inno Setup once:
+**Build and release:**
 
 ```bash
-sudo dnf install wine          # Fedora — or: sudo apt install wine
+./scripts/release.sh
+```
+
+This script bumps the patch version, builds the React dashboard, cross-compiles the Rust backend to `x86_64-pc-windows-gnu` via `cargo zigbuild`, assembles `dist/`, and starts a local HTTP server so the `.exe` can be downloaded directly from a Windows machine on the same network.
+
+**Script options:**
+
+| Flag | Effect |
+|------|--------|
+| `--no-bump` | Skip version bump |
+| `--no-serve` | Skip HTTP server after build |
+| `--no-installer` | Skip Inno Setup installer build |
+| `--port 8080` | HTTP server port (default: 8080) |
+
+**Installer build (one-time setup):**
+
+To produce `LMU-Pitwall-Setup-X.X.X.exe`, install Wine and Inno Setup 6 once:
+
+```bash
+sudo dnf install wine
 ./scripts/install-innosetup.sh
 ```
 
-Then run the release script (bumps version, builds both `.exe` variants, starts HTTP server):
-
-```bash
-./scripts/release.sh           # or: make serve
-```
+After that, `release.sh` automatically builds both the standalone `.exe` and the installer.
 
 ## Tech Stack
 
-- **Backend:** Rust — rF2 Shared Memory reader, WebSocket server (port 9000), REST API client
-- **Frontend:** React + TypeScript — widget-based layout with drag & drop
-- **Build:** cargo-zigbuild for Windows cross-compilation from Linux, rust-embed for single-binary distribution, Inno Setup 6 via Wine for the installer
-- **Design:** Dark theme (#0f0f0f background, #facc15 primary, #f97316 accent), Teko / Roboto Condensed / JetBrains Mono fonts
+| Layer | Technology |
+|-------|-----------|
+| Backend | Rust — shared memory reader, WebSocket server, REST API client |
+| Frontend | React + TypeScript — widget-based layout with drag & drop |
+| Cross-compilation | `cargo-zigbuild` — Windows `.exe` from Linux, no MinGW required |
+| Static embedding | `rust-embed` — React bundle baked into the binary |
+| Installer | Inno Setup 6 via Wine |
+| LMU data sources | rF2 Shared Memory (~60 Hz) + LMU REST API port 6397 |
+
+## Design
+
+| Token | Value |
+|-------|-------|
+| Background | `#0f0f0f` |
+| Primary | `#facc15` |
+| Accent | `#f97316` |
+| Fonts | Teko · Roboto Condensed · JetBrains Mono |
+
+## Contributing
+
+PRs are welcome. For larger changes, open an issue first to align on scope.
+
+**Workflow:**
+
+1. Fork the repo and create a feature branch off `main`
+2. Build and verify: `./scripts/release.sh --no-bump --no-serve --no-installer`
+3. Open a PR against `main` with a clear description of what and why
 
 ## Credits
 
