@@ -94,8 +94,8 @@ impl LapTracker {
                     snap.in_pits = v.mInPits != 0;
                     snap.finish_status = v.mFinishStatus;
 
-                    // Compound names come from the telemetry buffer (all vehicles).
-                    // Update and broadcast when they change (e.g. after a pit stop).
+                    // Compound names and dent severity come from the telemetry buffer  (all vehicles).
+                    // Update and broadcast when they change (e.g. after a pit stop / collision).
                     if let Some(t) = tel {
                         let tel_num = (t.mNumVehicles as usize).min(MAX_MAPPED_VEHICLES);
                         if let Some(tv) = t.mVehicles[..tel_num].iter().find(|tv| tv.mID == id) {
@@ -107,6 +107,10 @@ impl LapTracker {
                             {
                                 snap.tire_compound_front_name = front;
                                 snap.tire_compound_rear_name  = rear;
+                                any_new = true;
+                            }
+                            if snap.dent_severity != tv.mDentSeverity {
+                                snap.dent_severity = tv.mDentSeverity;
                                 any_new = true;
                             }
                         }
@@ -229,5 +233,6 @@ fn build_snapshot(
         lap_start_et: v.mLapStartET,
         speed_ms,
         has_telemetry: tel_veh.is_some(),
+        dent_severity: tel_veh.map(|tv| tv.mDentSeverity).unwrap_or([0u8; 8]),
     }
 }

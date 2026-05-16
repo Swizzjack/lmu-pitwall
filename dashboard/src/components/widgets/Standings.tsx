@@ -3,6 +3,7 @@ import { useTelemetryStore } from '../../stores/telemetryStore'
 import { useSettingsStore } from '../../stores/settingsStore'
 import { colors, fonts } from '../../styles/theme'
 import { getClassColor } from '../../utils/classColors'
+import { DAMAGE_ZONES, dentPct } from '../../utils/damage'
 import type { VehicleScoring } from '../../types/telemetry'
 
 function hexAlpha(hex: string, alpha: number): string {
@@ -77,6 +78,34 @@ function bestS2(v: VehicleScoring): number {
   return v.best_sector1 > 0 && v.best_sector2 > 0 ? v.best_sector2 - v.best_sector1 : -1
 }
 
+function MiniDamageGrid({ dentSeverity, width }: { dentSeverity: number[]; width: number }) {
+  const pct = dentPct(dentSeverity)
+  const pctColor = pct >= 75 ? '#ef4444' : pct >= 40 ? '#f97316' : pct > 0 ? '#eab308' : colors.textMuted
+  return (
+    <div style={{ width, display: 'flex', alignItems: 'center', gap: 4, flexShrink: 0 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 5px)', gridTemplateRows: 'repeat(3, 5px)', gap: '1px', flexShrink: 0 }}>
+        {DAMAGE_ZONES.map(({ idx, col, row }) => {
+          const sev = dentSeverity[idx] ?? 0
+          return (
+            <div key={idx} style={{
+              gridColumn: col,
+              gridRow: row,
+              width: 5,
+              height: 5,
+              borderRadius: 1,
+              background: sev === 2 ? '#ef4444' : sev === 1 ? '#f97316' : '#2a2a2a',
+            }} />
+          )
+        })}
+        <div style={{ gridColumn: 2, gridRow: 2, width: 5, height: 5, borderRadius: 1, background: '#161616' }} />
+      </div>
+      <span style={{ fontFamily: fonts.mono, fontSize: 10, fontWeight: 700, color: pctColor, minWidth: 26, textAlign: 'right' }}>
+        {pct > 0 ? `${pct}%` : '—'}
+      </span>
+    </div>
+  )
+}
+
 function sectorColor(val: number, sessionBest: number, personalBest: number): string {
   if (val < 0) return colors.text
   if (isFinite(sessionBest) && Math.abs(val - sessionBest) < 0.001) return SECTOR_SB
@@ -86,6 +115,8 @@ function sectorColor(val: number, sessionBest: number, personalBest: number): st
 
 export default function Standings() {
   const containerRef = useRef<HTMLDivElement>(null)
+  const scrollableRef = useRef<HTMLDivElement>(null)
+  const playerRowRef = useRef<HTMLDivElement>(null)
   const [containerWidth, setContainerWidth] = useState(500)
 
   useEffect(() => {
@@ -124,8 +155,26 @@ export default function Standings() {
     return map
   }, [allDrivers])
 
-  const sorted = [...vehicles].sort((a: VehicleScoring, b: VehicleScoring) => a.position - b.position)
+  const sorted = useMemo(
+    () => [...vehicles].sort((a: VehicleScoring, b: VehicleScoring) => a.position - b.position),
+    [vehicles],
+  )
   const leader = sorted[0]
+
+  const playerPosition = useMemo(
+    () => sorted.find(v => v.id === playerId)?.position ?? -1,
+    [sorted, playerId],
+  )
+  useEffect(() => {
+    const container = scrollableRef.current
+    const row = playerRowRef.current
+    if (!container || !row) return
+    const containerRect = container.getBoundingClientRect()
+    const rowRect = row.getBoundingClientRect()
+    const rowOffsetInContainer = rowRect.top - containerRect.top + container.scrollTop
+    const targetScrollTop = rowOffsetInContainer - container.clientHeight / 2 + rowRect.height / 2
+    container.scrollTo({ top: targetScrollTop, behavior: 'smooth' })
+  }, [playerPosition, playerId])
 
   // Compute class positions: rank within each vehicle_class (sorted already by overall position)
   const classPositions = useMemo(() => {
@@ -149,6 +198,16 @@ export default function Standings() {
   // Compound column only when at least one driver has compound name data AND setting allows it
   const hasCompoundData = settingShowCompound && compoundById.size > 0
 
+  // Damage column: show when any driver has at least one damaged zone
+  const damageById = useMemo(() => {
+    const map = new Map<number, number[]>()
+    for (const d of allDrivers) {
+      if (d.dent_severity) map.set(d.id, Array.from(d.dent_severity))
+    }
+    return map
+  }, [allDrivers])
+  const hasDamageData = [...damageById.values()].some(s => s.some(v => v > 0))
+
   // Session best per sector and lap (minimum across all vehicles with valid data)
   const validNums = (arr: number[]) => arr.filter((x) => x > 0)
   const sbS1 = Math.min(...validNums(sorted.map((v) => v.best_sector1)))
@@ -164,6 +223,7 @@ export default function Standings() {
   const W_GAP  = 72   // "+128.888"
   const W_VE   = 52   // "100%"
   const W_COMP = 52   // "Medium"
+  const W_DMG  = 54   // 17px dots + 4px gap + 26px % text
 
   const colHdr = (label: string, width: number, right = true) => (
     <span style={{
@@ -198,6 +258,7 @@ export default function Standings() {
           {showCarName && <span style={{ fontFamily: fonts.body, fontSize: 13, color: colors.textMuted, flex: '1 1 80px', overflow: 'hidden' }}>CAR</span>}
           {hasCompoundData && colHdr('COMP', W_COMP)}
           {hasVeData && colHdr('VE', W_VE)}
+          {hasDamageData && colHdr('DMG', W_DMG)}
           {colHdr('S1', W_SEC)}
           {colHdr('S2', W_SEC)}
           {colHdr('S3', W_SEC)}
@@ -212,7 +273,7 @@ export default function Standings() {
           Waiting for session…
         </div>
       ) : (
-        <div style={{ flex: 1, overflowY: 'auto' }}>
+        <div ref={scrollableRef} style={{ flex: 1, overflowY: 'auto' }}>
           {sorted.map((v) => {
             const isPlayer = v.id === playerId
             const vS1 = v.best_sector1
@@ -223,7 +284,7 @@ export default function Standings() {
             const cS3 = sectorColor(vS3, sbS3, -1)
 
             return (
-              <div key={v.id} style={{
+              <div key={v.id} ref={isPlayer ? playerRowRef : undefined} style={{
                 display: 'flex', alignItems: 'center', gap: 4,
                 padding: '3px 4px', borderRadius: 3,
                 background: isPlayer ? `${colors.primary}18` : 'transparent',
@@ -309,6 +370,14 @@ export default function Standings() {
                     </span>
                   )
                 })()}
+
+                {/* Damage grid */}
+                {hasDamageData && (
+                  <MiniDamageGrid
+                    dentSeverity={damageById.get(v.id) ?? [0, 0, 0, 0, 0, 0, 0, 0]}
+                    width={W_DMG}
+                  />
+                )}
 
                 {/* Sector times */}
                 <span style={{ fontFamily: fonts.mono, fontSize: 13, color: cS1, width: W_SEC, textAlign: 'right', flexShrink: 0 }}>{fmtSec(vS1)}</span>

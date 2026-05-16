@@ -101,6 +101,7 @@ export interface DriverLapSnapshot {
   lap_start_et: number
   speed_ms: number
   has_telemetry: boolean
+  dent_severity: [number, number, number, number, number, number, number, number]  // 8 body zones: 0=none, 1=dented, 2=very dented
 }
 
 export interface AllDriversUpdate {
@@ -200,6 +201,10 @@ export interface VehicleStatusUpdate {
   last_impact_et: number
   tire_flat: [boolean, boolean, boolean, boolean]      // FL, FR, RL, RR
   tire_detached: [boolean, boolean, boolean, boolean]  // FL, FR, RL, RR
+  // Wearables (from REST API) — -1 = unavailable
+  aero_damage: number                                  // 0.0–1.0
+  brake_wear: [number, number, number, number]         // FL, FR, RL, RR 0.0–1.0
+  suspension_damage: [number, number, number, number]  // FL, FR, RL, RR 0.0–1.0
   // Race flags (from scoring + rules)
   yellow_flag_state: number  // -1=no scoring, 0=none, 1=pending, 2=pits closed, 3=pit lead lap, 4=pits open, 5=last lap, 6=resume, 7=race halt
   sector_flags: [number, number, number]  // S1, S2, S3 local yellow

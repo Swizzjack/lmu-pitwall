@@ -36,12 +36,21 @@ fn main() {
     });
 
     // "--" prevents zig rc from treating absolute Linux paths as /option flags
-    let status = Command::new(&zig)
+    let status = match Command::new(&zig)
         .args(["rc", "--", rc_path.to_str().unwrap(), res_path.to_str().unwrap()])
         .status()
-        .unwrap_or_else(|e| panic!("Failed to run `{} rc`: {}", zig, e));
+    {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("cargo:warning=zig not found ({e}) — skipping icon embed");
+            return;
+        }
+    };
 
-    assert!(status.success(), "`zig rc` failed — icon will not be embedded");
+    if !status.success() {
+        eprintln!("cargo:warning=`zig rc` failed — skipping icon embed");
+        return;
+    }
 
     // LLD (used by cargo-zigbuild for windows-gnu) accepts .res files directly
     println!("cargo:rustc-link-arg={}", res_path.display());
