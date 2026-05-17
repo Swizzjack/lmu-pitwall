@@ -101,6 +101,7 @@ function CarDiagram({ dentSeverity, aeroPct, lastImpact, overheating, anyDetache
 }) {
   const totalPct  = dentSeverity.reduce((sum, s) => sum + (SEV_PCT[s] ?? 0), 0)
   const overallPct = Math.round(totalPct / (dentSeverity.length * 100) * 100)
+  const displayPct = aeroPct !== null ? Math.round(aeroPct) : overallPct
   const showImpact = lastImpact > 10
 
   return (
@@ -110,8 +111,8 @@ function CarDiagram({ dentSeverity, aeroPct, lastImpact, overheating, anyDetache
         <div style={{ fontFamily: fonts.body, fontSize: 13, color: colors.textMuted, letterSpacing: 2, textTransform: 'uppercase' }}>
           Body Damage
         </div>
-        <div style={{ fontFamily: fonts.mono, fontSize: 13, color: barColor(overallPct), fontWeight: 700 }}>
-          {overallPct}%
+        <div style={{ fontFamily: fonts.mono, fontSize: 13, color: barColor(displayPct), fontWeight: 700 }}>
+          {displayPct}%
         </div>
       </div>
 
