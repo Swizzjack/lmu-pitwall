@@ -54,6 +54,8 @@ struct TelemetryState {
     ve_available: Option<bool>,
     /// Latest wearables snapshot from RepairAndRefuel REST API.
     wearables: garage_api::WearablesSnapshot,
+    /// Latest weather forecast nodes from /rest/sessions/weather REST API.
+    weather_forecast: Vec<garage_api::WeatherForecastNode>,
 }
 
 impl TelemetryState {
@@ -67,6 +69,7 @@ impl TelemetryState {
             ve_history: None,
             ve_available: None,
             wearables: garage_api::WearablesSnapshot::default(),
+            weather_forecast: Vec::new(),
         }
     }
 }
@@ -270,7 +273,7 @@ fn build_electronics_update(snap: &ElectronicsSnapshot) -> ServerMessage {
     }
 }
 
-fn build_session_info(sc: &rF2ScoringBuffer) -> ServerMessage {
+fn build_session_info(sc: &rF2ScoringBuffer, forecast: Vec<garage_api::WeatherForecastNode>) -> ServerMessage {
     let info = &sc.mScoringInfo;
     ServerMessage::SessionInfo {
         track_name:      bytes_to_str(&info.mTrackName).to_string(),
@@ -279,6 +282,8 @@ fn build_session_info(sc: &rF2ScoringBuffer) -> ServerMessage {
             air_temp:       info.mAmbientTemp,
             track_temp:     info.mTrackTemp,
             rain_intensity: info.mRaining,
+            dark_cloud:     info.mDarkCloud,
+            forecast,
         },
         // Filter mMaxLaps: time-based races use 999999, uninitialized can be INT32_MAX.
         // Only send a valid lap count when it's a genuine lap-limited session.
@@ -415,6 +420,9 @@ async fn task_polling(
     // Guard: skip tick if a wearables fetch is already in flight.
     let wearables_in_flight = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
+    // Channel for weather forecast fetch results.
+    let (forecast_tx, mut forecast_rx) = tokio::sync::mpsc::channel::<Vec<garage_api::WeatherForecastNode>>(4);
+
     let mut poll_ticker = tokio::time::interval(Duration::from_millis(20)); // 50 Hz
     poll_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
@@ -429,6 +437,10 @@ async fn task_polling(
     // Wearables poll every 2 seconds (damage changes slowly).
     let mut wearables_ticker = tokio::time::interval(Duration::from_secs(2));
     wearables_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+    // Weather forecast poll every 5 seconds.
+    let mut forecast_ticker = tokio::time::interval(Duration::from_secs(5));
+    forecast_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
     // Player name for strategy/usage lookup (extracted from scoring).
     let mut last_player_name = String::new();
@@ -549,6 +561,27 @@ async fn task_polling(
             // --- wearables result ---
             Some(w) = wearables_rx.recv() => {
                 state.write().await.wearables = w;
+            }
+
+            // --- weather forecast poll (0.2 Hz — every 5 s) ---
+            _ = forecast_ticker.tick() => {
+                if reader.is_connected() {
+                    let session = state.read().await.scoring
+                        .as_ref()
+                        .map(|sc| sc.mScoringInfo.mSession)
+                        .unwrap_or(0);
+                    let tx = forecast_tx.clone();
+                    tokio::task::spawn_blocking(move || {
+                        if let Some(nodes) = garage_api::fetch_weather_forecast(session) {
+                            let _ = tx.blocking_send(nodes);
+                        }
+                    });
+                }
+            }
+
+            // --- weather forecast result ---
+            Some(nodes) = forecast_rx.recv() => {
+                state.write().await.weather_forecast = nodes;
             }
 
             // --- 0.5 Hz health check / reconnect ---
@@ -735,7 +768,7 @@ async fn task_broadcaster(
             };
 
             let session_msg = if send_session {
-                s.scoring.as_ref().map(build_session_info)
+                s.scoring.as_ref().map(|sc| build_session_info(sc, s.weather_forecast.clone()))
             } else {
                 None
             };
