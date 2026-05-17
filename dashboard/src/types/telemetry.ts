@@ -17,10 +17,18 @@ export interface TireData {
   brake_temp: number
 }
 
+export interface WeatherForecastNode {
+  sky_type: number      // 0=clear … 10=heavy rain
+  temperature: number   // Celsius
+  rain_chance: number   // 0.0–1.0
+}
+
 export interface WeatherData {
   air_temp: number
   track_temp: number
   rain_intensity: number
+  dark_cloud: number          // 0.0–1.0 cloud coverage
+  forecast: WeatherForecastNode[]
 }
 
 export interface VehicleScoring {
