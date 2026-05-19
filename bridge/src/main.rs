@@ -279,10 +279,13 @@ fn build_session_info(sc: &rF2ScoringBuffer, forecast: Vec<garage_api::WeatherFo
         track_name:      bytes_to_str(&info.mTrackName).to_string(),
         track_length:    info.mLapDist,
         weather: WeatherData {
-            air_temp:       info.mAmbientTemp,
-            track_temp:     info.mTrackTemp,
-            rain_intensity: info.mRaining,
-            dark_cloud:     info.mDarkCloud,
+            air_temp:          info.mAmbientTemp,
+            track_temp:        info.mTrackTemp,
+            rain_intensity:    info.mRaining,
+            dark_cloud:        info.mDarkCloud,
+            avg_path_wetness:  info.mAvgPathWetness,
+            min_path_wetness:  info.mMinPathWetness,
+            max_path_wetness:  info.mMaxPathWetness,
             forecast,
         },
         // Filter mMaxLaps: time-based races use 999999, uninitialized can be INT32_MAX.

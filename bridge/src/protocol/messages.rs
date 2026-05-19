@@ -35,6 +35,9 @@ pub struct WeatherData {
     pub track_temp: f64,
     pub rain_intensity: f64,
     pub dark_cloud: f64,        // cloud coverage 0.0–1.0 (mDarkCloud)
+    pub avg_path_wetness: f64,  // actual water on racing line 0.0–1.0 (mAvgPathWetness)
+    pub min_path_wetness: f64,  // minimum wetness on racing line (mMinPathWetness)
+    pub max_path_wetness: f64,  // maximum wetness on racing line (mMaxPathWetness)
     /// 5 forecast nodes: 0%, 25%, 50%, 75%, 100% of session length.
     /// Empty when LMU REST API is unavailable.
     pub forecast: Vec<WeatherForecastNode>,

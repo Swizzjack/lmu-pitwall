@@ -1,4 +1,4 @@
-import { Sun, CloudSun, Cloud, CloudRain, CloudLightning, CloudFog, CloudDrizzle } from 'lucide-react'
+import { Sun, CloudSun, Cloud, CloudRain, CloudLightning, CloudDrizzle } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import { useTelemetryStore } from '../../stores/telemetryStore'
 import { useSettingsStore } from '../../stores/settingsStore'
@@ -12,67 +12,97 @@ import type { WeatherSnapshot } from '../../stores/telemetryStore'
 
 interface WeatherIconDef { Icon: LucideIcon; color: string }
 
-function resolveWeatherIcon(rainValue: number, skyType?: number): WeatherIconDef {
+function resolveWeatherIcon(rainValue: number, skyType?: number, darkCloud?: number): WeatherIconDef {
   if (skyType !== undefined && skyType >= 0 && skyType <= 10) {
+    // WNV_SKY: 0=Clear, 1=Light Cloud, 2=Partly Cloudy, 3=Mostly Cloudy, 4=Overcast,
+    //          5=Drizzle, 6=Light Rain, 7=Overcast+Light Rain, 8=Rain, 9=Heavy Rain, 10=Storm
     switch (skyType) {
       case 0:  return { Icon: Sun,            color: '#facc15' }
       case 1:  return { Icon: CloudSun,       color: '#94a3b8' }
       case 2:  return { Icon: CloudSun,       color: '#6b7280' }
       case 3:  return { Icon: Cloud,          color: '#9ca3af' }
-      case 4:  return { Icon: CloudFog,       color: '#9ca3af' }
+      case 4:  return { Icon: Cloud,          color: '#6b7280' }  // Overcast
       case 5:  return { Icon: CloudDrizzle,   color: '#93c5fd' }
       case 6:  return { Icon: CloudDrizzle,   color: '#60a5fa' }
       case 7:  return { Icon: CloudRain,      color: '#60a5fa' }
       case 8:  return { Icon: CloudRain,      color: '#3b82f6' }
-      case 9:  return { Icon: CloudLightning, color: '#f97316' }
+      case 9:  return { Icon: CloudRain,      color: '#ef4444' }  // Heavy Rain
       case 10: return { Icon: CloudLightning, color: '#ef4444' }
     }
   }
-  // Fallback: derive from rain intensity when sky_type is absent or out of range
-  if (rainValue > 0.6)  return { Icon: CloudLightning, color: '#f97316' }
-  if (rainValue > 0.25) return { Icon: CloudRain,      color: '#60a5fa' }
-  if (rainValue > 0.05) return { Icon: Cloud,          color: '#9ca3af' }
-  if (rainValue > 0.01) return { Icon: CloudSun,       color: '#94a3b8' }
-  return                       { Icon: Sun,             color: '#facc15' }
+  // Fallback: thresholds match TinyPedal's mRaining → sky_type mapping
+  if (rainValue > 0.60) return { Icon: CloudLightning, color: '#ef4444' }  // storm
+  if (rainValue > 0.40) return { Icon: CloudRain,      color: '#ef4444' }  // heavy rain
+  if (rainValue > 0.20) return { Icon: CloudRain,      color: '#3b82f6' }  // rain
+  if (rainValue > 0.15) return { Icon: CloudRain,      color: '#60a5fa' }  // light rain
+  if (rainValue > 0.10) return { Icon: CloudDrizzle,   color: '#60a5fa' }  // drizzle+
+  if (rainValue > 0)    return { Icon: CloudDrizzle,   color: '#93c5fd' }  // drizzle
+  // No rain — use dark_cloud (mDarkCloud) for overcast/cloudy conditions
+  const dc = darkCloud ?? 0
+  if (dc > 0.70) return { Icon: Cloud,    color: '#6b7280' }  // overcast
+  if (dc > 0.40) return { Icon: Cloud,    color: '#9ca3af' }  // mostly cloudy
+  if (dc > 0.20) return { Icon: CloudSun, color: '#6b7280' }  // partly cloudy
+  if (dc > 0.05) return { Icon: CloudSun, color: '#94a3b8' }  // light cloud
+  return                 { Icon: Sun,     color: '#facc15' }  // clear
 }
 
 // ---------------------------------------------------------------------------
 // Trend computation from history
 // ---------------------------------------------------------------------------
 
-type Trend = 'drying' | 'stable' | 'wetting'
+// ---------------------------------------------------------------------------
+// Wetness state — based on actual water on track (mAvgPathWetness)
+// WET is a threshold state (track saturated ≥ 40%), not a trend direction.
+// DAMP = stable moderate moisture between DRY and WET.
+// ---------------------------------------------------------------------------
 
-interface TrendResult {
-  track: Trend
-  rain: Trend
-  dominant: Trend
+type WetState = 'dry' | 'drying' | 'damp' | 'wetting' | 'wet'
+
+function computeWetState(history: WeatherSnapshot[]): WetState {
+  const COMPARE_WINDOW = 6
+  const latest = history[history.length - 1]
+  if (!latest) return 'dry'
+  const avg = latest.avg_path_wetness
+  if (avg >= 0.40) return 'wet'
+  if (avg < 0.02)  return 'dry'
+  if (history.length >= COMPARE_WINDOW) {
+    const old   = history[history.length - COMPARE_WINDOW]
+    const delta = avg - old.avg_path_wetness
+    if (delta >  0.03) return 'wetting'
+    if (delta < -0.03) return 'drying'
+  }
+  return 'damp'
 }
 
-function computeTrend(history: WeatherSnapshot[]): TrendResult {
-  const COMPARE_WINDOW = 6   // compare last entry vs ~3 min ago (6 × 30s)
-  const stable: TrendResult = { track: 'stable', rain: 'stable', dominant: 'stable' }
+const WET_CONFIG: Record<WetState, { label: string; symbol: string; color: string }> = {
+  dry:     { label: 'DRY',     symbol: '○', color: '#facc15' },
+  drying:  { label: 'DRYING',  symbol: '↑', color: '#22c55e' },
+  damp:    { label: 'DAMP',    symbol: '~', color: '#6b7280' },
+  wetting: { label: 'WETTING', symbol: '↓', color: '#60a5fa' },
+  wet:     { label: 'WET',     symbol: '●', color: '#38bdf8' },
+}
 
-  if (history.length < 3) return stable
+// ---------------------------------------------------------------------------
+// Temperature trend — track temp over 90s window (grip / rubber / evaporation)
+// ---------------------------------------------------------------------------
 
+type TempTrend = 'warming' | 'stable' | 'cooling'
+
+function computeTempTrend(history: WeatherSnapshot[]): TempTrend {
+  const COMPARE_WINDOW = 6
+  if (history.length < COMPARE_WINDOW) return 'stable'
   const recent = history[history.length - 1]
-  const old    = history[Math.max(0, history.length - COMPARE_WINDOW)]
-
-  const trackDelta = recent.track_temp - old.track_temp
-  const rainDelta  = recent.rain_intensity - old.rain_intensity
-
-  const track: Trend = trackDelta > 0.8 ? 'drying' : trackDelta < -0.8 ? 'wetting' : 'stable'
-  const rain:  Trend = rainDelta  > 0.04 ? 'wetting' : rainDelta < -0.04 ? 'drying'  : 'stable'
-
-  // Rain trend dominates track temp (rain is more critical for driver)
-  const dominant: Trend = rain !== 'stable' ? rain : track !== 'stable' ? track : 'stable'
-
-  return { track, rain, dominant }
+  const old    = history[history.length - COMPARE_WINDOW]
+  const delta  = recent.track_temp - old.track_temp
+  if (delta >  1.5) return 'warming'
+  if (delta < -1.0) return 'cooling'
+  return 'stable'
 }
 
-const TREND_CONFIG: Record<Trend, { label: string; arrow: string; color: string }> = {
-  drying:  { label: 'DRYING',  arrow: '↑', color: '#22c55e' },
-  stable:  { label: 'STABLE',  arrow: '→', color: '#6b7280' },
-  wetting: { label: 'WETTING', arrow: '↓', color: '#60a5fa' },
+const TEMP_CONFIG: Record<TempTrend, { label: string; symbol: string; color: string }> = {
+  warming: { label: 'WARMING', symbol: '↑', color: '#f97316' },
+  stable:  { label: 'STABLE',  symbol: '→', color: '#6b7280' },
+  cooling: { label: 'COOLING', symbol: '↓', color: '#94a3b8' },
 }
 
 // ---------------------------------------------------------------------------
@@ -86,34 +116,71 @@ function Sparkline({ history, toDisplayTemp }: {
   if (history.length < 3) return null
 
   const W = 200
-  const H = 28
+  const H = 36
   const PAD = 2
 
-  function buildPath(values: number[]): string {
-    const min = Math.min(...values)
-    const max = Math.max(...values)
-    const range = max - min || 1
+  function buildRainPath(values: number[]): string {
+    // Always anchored at 0 so a small drizzle doesn't fill the whole chart
+    const fixedMax = Math.max(1.0, ...values)
     return values.map((v, i) => {
       const x = PAD + (i / (values.length - 1)) * (W - PAD * 2)
-      const y = PAD + (1 - (v - min) / range) * (H - PAD * 2)
+      const y = PAD + (1 - v / fixedMax) * (H - PAD * 2)
       return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`
     }).join(' ')
   }
 
-  const trackVals = history.map(s => toDisplayTemp(s.track_temp))
-  const rainVals  = history.map(s => s.rain_intensity)
+  function buildTempPath(values: number[]): string {
+    const min = Math.min(...values)
+    const max = Math.max(...values)
+    // Enforce minimum 3° range to avoid noise amplification on stable temps
+    const mid = (min + max) / 2
+    const half = Math.max((max - min) / 2, 1.5)
+    const lo = mid - half
+    const hi = mid + half
+    return values.map((v, i) => {
+      const x = PAD + (i / (values.length - 1)) * (W - PAD * 2)
+      const y = PAD + (1 - (v - lo) / (hi - lo)) * (H - PAD * 2)
+      return `${i === 0 ? 'M' : 'L'}${x.toFixed(1)},${y.toFixed(1)}`
+    }).join(' ')
+  }
+
+  const trackVals   = history.map(s => toDisplayTemp(s.track_temp))
+  const rainVals    = history.map(s => s.rain_intensity)
+  const wetnessVals = history.map(s => s.avg_path_wetness)
+  const rainPath    = buildRainPath(rainVals)
+  const wetPath     = buildRainPath(wetnessVals)
+  const bottom      = (PAD + (H - PAD * 2)).toFixed(1)
 
   return (
-    <svg width="100%" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ display: 'block', height: H }}>
-      {/* Rain (blue, filled area) */}
-      <path
-        d={buildPath(rainVals) + ` L${W - PAD},${H} L${PAD},${H} Z`}
-        fill="#60a5fa18" stroke="none"
-      />
-      <path d={buildPath(rainVals)} fill="none" stroke="#60a5fa" strokeWidth="1.2" strokeLinejoin="round" />
-      {/* Track temp (orange line) */}
-      <path d={buildPath(trackVals)} fill="none" stroke="#f97316" strokeWidth="1.5" strokeLinejoin="round" />
-    </svg>
+    <div>
+      <svg width="100%" viewBox={`0 0 ${W} ${H}`} preserveAspectRatio="none" style={{ display: 'block', height: H }}>
+        {/* Track wetness (cyan filled — actual water on track) */}
+        <path
+          d={wetPath + ` L${(PAD + (W - PAD * 2)).toFixed(1)},${bottom} L${PAD},${bottom} Z`}
+          fill="#38bdf818" stroke="none"
+        />
+        <path d={wetPath} fill="none" stroke="#38bdf8" strokeWidth="1.2" strokeLinejoin="round" />
+        {/* Rain intensity (blue line — precipitation rate) */}
+        <path d={rainPath} fill="none" stroke="#60a5fa" strokeWidth="1.2" strokeDasharray="3,2" strokeLinejoin="round" />
+        {/* Track temp (orange line, relative scale) */}
+        <path d={buildTempPath(trackVals)} fill="none" stroke="#f97316" strokeWidth="1.5" strokeLinejoin="round" />
+      </svg>
+      {/* Legend */}
+      <div style={{ display: 'flex', gap: 10, justifyContent: 'flex-end', marginTop: 2 }}>
+        <span style={{ fontFamily: fonts.body, fontSize: 9, color: '#f97316', display: 'flex', alignItems: 'center', gap: 3 }}>
+          <span style={{ display: 'inline-block', width: 12, height: 2, background: '#f97316', borderRadius: 1 }} />
+          Track °
+        </span>
+        <span style={{ fontFamily: fonts.body, fontSize: 9, color: '#60a5fa', display: 'flex', alignItems: 'center', gap: 3 }}>
+          <span style={{ display: 'inline-block', width: 12, height: 2, background: '#60a5fa', borderRadius: 1, opacity: 0.6 }} />
+          Rain
+        </span>
+        <span style={{ fontFamily: fonts.body, fontSize: 9, color: '#38bdf8', display: 'flex', alignItems: 'center', gap: 3 }}>
+          <span style={{ display: 'inline-block', width: 12, height: 2, background: '#38bdf8', borderRadius: 1 }} />
+          Wet
+        </span>
+      </div>
+    </div>
   )
 }
 
@@ -223,19 +290,23 @@ export default function WeatherWidget() {
   const toDisplayTemp      = useSettingsStore((s) => s.toDisplayTemp)
   const tempUnitLabel      = useSettingsStore((s) => s.tempUnitLabel)
 
-  const airTempC      = weather?.air_temp      ?? 20
-  const trackTempC    = weather?.track_temp    ?? 25
-  const rainIntensity = weather?.rain_intensity ?? 0
-  const darkCloud     = weather?.dark_cloud    ?? 0
-  const forecast      = weather?.forecast      ?? []
+  const airTempC         = weather?.air_temp          ?? 20
+  const trackTempC       = weather?.track_temp        ?? 25
+  const rainIntensity    = weather?.rain_intensity    ?? 0
+  const darkCloud        = weather?.dark_cloud        ?? 0
+  const avgPathWetness   = weather?.avg_path_wetness  ?? 0
+  const maxPathWetness   = weather?.max_path_wetness  ?? 0
+  const forecast         = weather?.forecast          ?? []
 
   const airTemp   = toDisplayTemp(airTempC)
   const trackTemp = toDisplayTemp(trackTempC)
   const tempLabel = tempUnitLabel()
 
-  const { Icon: CurrentIcon, color: iconColor } = resolveWeatherIcon(rainIntensity)
-  const trend      = computeTrend(weatherHistory)
-  const trendCfg   = TREND_CONFIG[trend.dominant]
+  const { Icon: CurrentIcon, color: iconColor } = resolveWeatherIcon(rainIntensity, undefined, darkCloud)
+  const wetState  = computeWetState(weatherHistory)
+  const tempTrend = computeTempTrend(weatherHistory)
+  const wetCfg    = WET_CONFIG[wetState]
+  const tempCfg   = TEMP_CONFIG[tempTrend]
   const hasHistory = weatherHistory.length >= 3
 
   // Compute ETA for each forecast node.
@@ -263,38 +334,78 @@ export default function WeatherWidget() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
         <CurrentIcon size={36} color={iconColor} strokeWidth={1.5} />
 
-        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 4 }}>
-          {/* Rain bar + % */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-            <span style={{ fontFamily: fonts.body, fontSize: 13, color: colors.textMuted, textTransform: 'uppercase', letterSpacing: 1 }}>
-              Rain
-            </span>
-            <span style={{ fontFamily: fonts.mono, fontSize: 20, color: rainIntensity > 0.3 ? '#60a5fa' : colors.textMuted, lineHeight: 1, fontWeight: 700 }}>
-              {(rainIntensity * 100).toFixed(0)}%
-            </span>
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 5 }}>
+          {/* Rain intensity bar */}
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 2 }}>
+              <span style={{ fontFamily: fonts.body, fontSize: 11, color: colors.textMuted, textTransform: 'uppercase', letterSpacing: 1 }}>
+                Rain
+              </span>
+              <span style={{ fontFamily: fonts.mono, fontSize: 18, color: rainIntensity > 0.3 ? '#60a5fa' : colors.textMuted, lineHeight: 1, fontWeight: 700 }}>
+                {(rainIntensity * 100).toFixed(0)}%
+              </span>
+            </div>
+            <div style={{ width: '100%', height: 4, background: '#222', borderRadius: 2, overflow: 'hidden' }}>
+              <div style={{
+                width: `${rainIntensity * 100}%`, height: '100%',
+                background: rainIntensity > 0.5 ? '#60a5fa' : rainIntensity > 0.1 ? '#93c5fd' : colors.textMuted,
+                borderRadius: 2, transition: 'width 0.5s, background 0.5s',
+              }} />
+            </div>
           </div>
-          <div style={{ width: '100%', height: 4, background: '#222', borderRadius: 2, overflow: 'hidden' }}>
-            <div style={{
-              width: `${rainIntensity * 100}%`, height: '100%',
-              background: rainIntensity > 0.5 ? '#60a5fa' : rainIntensity > 0.1 ? '#93c5fd' : colors.textMuted,
-              borderRadius: 2, transition: 'width 0.5s, background 0.5s',
-            }} />
+          {/* Track wetness bar — actual water on surface */}
+          <div>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 2 }}>
+              <span style={{ fontFamily: fonts.body, fontSize: 11, color: colors.textMuted, textTransform: 'uppercase', letterSpacing: 1 }}>
+                Track wet
+              </span>
+              <span style={{ fontFamily: fonts.mono, fontSize: 18, color: avgPathWetness > 0.3 ? '#38bdf8' : avgPathWetness > 0.05 ? '#7dd3fc' : colors.textMuted, lineHeight: 1, fontWeight: 700 }}>
+                {(avgPathWetness * 100).toFixed(0)}%
+                {maxPathWetness > avgPathWetness + 0.05 && (
+                  <span style={{ fontSize: 11, fontWeight: 400, color: colors.textMuted }}>
+                    {' '}(max {(maxPathWetness * 100).toFixed(0)}%)
+                  </span>
+                )}
+              </span>
+            </div>
+            <div style={{ width: '100%', height: 4, background: '#222', borderRadius: 2, overflow: 'hidden' }}>
+              <div style={{
+                width: `${avgPathWetness * 100}%`, height: '100%',
+                background: avgPathWetness > 0.5 ? '#38bdf8' : avgPathWetness > 0.1 ? '#7dd3fc' : '#475569',
+                borderRadius: 2, transition: 'width 0.5s, background 0.5s',
+              }} />
+            </div>
           </div>
         </div>
 
-        {/* Trend badge — large, readable at a glance */}
-        <div style={{
-          display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1,
-          background: `${trendCfg.color}18`,
-          border: `1px solid ${trendCfg.color}55`,
-          borderRadius: 6, padding: '4px 8px', minWidth: 58, flexShrink: 0,
-        }}>
-          <span style={{ fontFamily: fonts.mono, fontSize: 18, color: trendCfg.color, lineHeight: 1, fontWeight: 700 }}>
-            {trendCfg.arrow}
-          </span>
-          <span style={{ fontFamily: fonts.body, fontSize: 9, color: trendCfg.color, letterSpacing: 1, textTransform: 'uppercase' }}>
-            {trendCfg.label}
-          </span>
+        {/* Two stacked badges: wetness state + temperature trend */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 4, flexShrink: 0 }}>
+          {/* Wetness badge */}
+          <div style={{
+            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1,
+            background: `${wetCfg.color}18`, border: `1px solid ${wetCfg.color}55`,
+            borderRadius: 5, padding: '3px 7px', minWidth: 60,
+          }}>
+            <span style={{ fontFamily: fonts.mono, fontSize: 16, color: wetCfg.color, lineHeight: 1, fontWeight: 700 }}>
+              {wetCfg.symbol}
+            </span>
+            <span style={{ fontFamily: fonts.body, fontSize: 8, color: wetCfg.color, letterSpacing: 1, textTransform: 'uppercase' }}>
+              {wetCfg.label}
+            </span>
+          </div>
+          {/* Temperature trend badge */}
+          <div style={{
+            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1,
+            background: `${tempCfg.color}18`, border: `1px solid ${tempCfg.color}55`,
+            borderRadius: 5, padding: '3px 7px', minWidth: 60,
+          }}>
+            <span style={{ fontFamily: fonts.mono, fontSize: 16, color: tempCfg.color, lineHeight: 1, fontWeight: 700 }}>
+              {tempCfg.symbol}
+            </span>
+            <span style={{ fontFamily: fonts.body, fontSize: 8, color: tempCfg.color, letterSpacing: 1, textTransform: 'uppercase' }}>
+              {tempCfg.label}
+            </span>
+          </div>
         </div>
       </div>
 
@@ -316,11 +427,18 @@ export default function WeatherWidget() {
             {trackTemp.toFixed(1)}<span style={{ fontSize: 12, fontWeight: 400 }}>{tempLabel}</span>
           </span>
         </div>
-        {/* Cloud */}
+        {/* Cloud coverage */}
         <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
           <span style={{ fontFamily: fonts.body, fontSize: 11, color: colors.textMuted, textTransform: 'uppercase', letterSpacing: 1 }}>Cloud</span>
           <span style={{ fontFamily: fonts.mono, fontSize: 18, color: darkCloud > 0.6 ? '#9ca3af' : '#facc15', fontWeight: 700, lineHeight: 1 }}>
             {(darkCloud * 100).toFixed(0)}<span style={{ fontSize: 12, fontWeight: 400 }}>%</span>
+          </span>
+        </div>
+        {/* Track wetness summary */}
+        <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 2 }}>
+          <span style={{ fontFamily: fonts.body, fontSize: 11, color: colors.textMuted, textTransform: 'uppercase', letterSpacing: 1 }}>Wet</span>
+          <span style={{ fontFamily: fonts.mono, fontSize: 18, color: avgPathWetness > 0.3 ? '#38bdf8' : avgPathWetness > 0.05 ? '#7dd3fc' : colors.textMuted, fontWeight: 700, lineHeight: 1 }}>
+            {(avgPathWetness * 100).toFixed(0)}<span style={{ fontSize: 12, fontWeight: 400 }}>%</span>
           </span>
         </div>
       </div>
