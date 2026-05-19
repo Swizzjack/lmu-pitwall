@@ -225,5 +225,7 @@ pub fn build_default_rules() -> Vec<Box<dyn Rule>> {
         Box::new(RainEscalationRule),
         Box::new(AmbientTempChangeRule::new()),
         Box::new(TrackTempChangeRule::new()),
+        Box::new(RainForecastWarningRule::ten_min()),
+        Box::new(RainForecastWarningRule::five_min()),
     ]
 }

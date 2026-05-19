@@ -879,6 +879,7 @@ async fn task_broadcaster(
                     &fuel_snapshot,
                     safety_car_active,
                     ve_available,
+                    &s.weather_forecast,
                 );
                 drop(s); // release read lock before dispatcher
 
