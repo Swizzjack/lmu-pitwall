@@ -17,8 +17,10 @@ import type { WeatherSnapshot } from '../../stores/telemetryStore'
 
 interface WeatherIconDef { Icon: LucideIcon; color: string }
 
-function resolveWeatherIcon(rainValue: number, skyType?: number): WeatherIconDef {
+function resolveWeatherIcon(rainValue: number, skyType?: number, darkCloud?: number): WeatherIconDef {
   if (skyType !== undefined && skyType >= 0 && skyType <= 10) {
+    // WNV_SKY: 0=Clear, 1=Light Cloud, 2=Partly Cloudy, 3=Mostly Cloudy, 4=Overcast,
+    //          5=Drizzle, 6=Light Rain, 7=Overcast+Light Rain, 8=Rain, 9=Heavy Rain, 10=Storm
     switch (skyType) {
       case 0:  return { Icon: Sun,            color: '#facc15' }
       case 1:  return { Icon: CloudSun,       color: '#94a3b8' }
@@ -35,9 +37,15 @@ function resolveWeatherIcon(rainValue: number, skyType?: number): WeatherIconDef
   }
   if (rainValue > 0.6)  return { Icon: CloudLightning, color: '#f97316' }
   if (rainValue > 0.25) return { Icon: CloudRain,      color: '#60a5fa' }
-  if (rainValue > 0.05) return { Icon: Cloud,          color: '#9ca3af' }
-  if (rainValue > 0.01) return { Icon: CloudSun,       color: '#94a3b8' }
-  return                       { Icon: Sun,             color: '#facc15' }
+  if (rainValue > 0.10) return { Icon: CloudDrizzle,   color: '#60a5fa' }
+  if (rainValue > 0)    return { Icon: CloudDrizzle,   color: '#93c5fd' }
+
+  const dc = darkCloud ?? 0
+  if (dc > 0.70) return { Icon: Cloud,    color: '#6b7280' }  // overcast
+  if (dc > 0.40) return { Icon: Cloud,    color: '#9ca3af' }  // mostly cloudy
+  if (dc > 0.20) return { Icon: CloudSun, color: '#6b7280' }  // partly cloudy
+  if (dc > 0.05) return { Icon: CloudSun, color: '#94a3b8' }  // light cloud
+  return                 { Icon: Sun,     color: '#facc15' }  // clear
 }
 
 
@@ -213,7 +221,7 @@ interface NodeEta {
 function formatEta(eta: NodeEta): string {
   const { minutes, laps } = eta
   if (minutes < 1) return '< 1 min'
-  const lapStr = laps !== null && laps > 0 ? ` / ${laps}L` : ''
+  const lapStr = laps !== null && laps > 0 ? `\n${laps}L` : ''
   if (minutes >= 60) return `${(minutes / 60).toFixed(1)}h${lapStr}`
   return `${Math.round(minutes)}m${lapStr}`
 }
@@ -225,11 +233,13 @@ function formatAgo(minutes: number): string {
   return `${Math.round(abs)}m ago`
 }
 
-function ForecastPanel({ nodes, toDisplayTemp, tempLabel, nodeEta }: {
+function ForecastPanel({ nodes, toDisplayTemp, tempLabel, nodeEta, liveRain, liveDarkCloud }: {
   nodes: WeatherForecastNode[]
   toDisplayTemp: (c: number) => number
   tempLabel: string
   nodeEta: NodeEta[]
+  liveRain: number
+  liveDarkCloud: number
 }) {
   if (nodes.length === 0) return null
 
@@ -252,8 +262,24 @@ function ForecastPanel({ nodes, toDisplayTemp, tempLabel, nodeEta }: {
           const isNow  = i === nowIdx
           const isPast = i < nowIdx
 
-          const { Icon, color } = resolveWeatherIcon(node.rain_chance, node.sky_type)
-          const rainColor = node.rain_chance > 0.5 ? '#60a5fa' : node.rain_chance > 0.2 ? '#93c5fd' : colors.textMuted
+          // NOW: live mRaining; future: blend live→forecast over 30 min; past: REST data
+          let displayRain: number
+          let resolvedIcon: WeatherIconDef
+          if (isNow) {
+            displayRain = liveRain
+            resolvedIcon = resolveWeatherIcon(liveRain, undefined, liveDarkCloud)
+          } else if (!isPast) {
+            const liveWeight = Math.max(0, 1 - eta.minutes / 30)
+            displayRain = liveRain * liveWeight + node.rain_chance * (1 - liveWeight)
+            resolvedIcon = liveWeight > 0.1
+              ? resolveWeatherIcon(displayRain)
+              : resolveWeatherIcon(node.rain_chance, node.sky_type)
+          } else {
+            displayRain = node.rain_chance
+            resolvedIcon = resolveWeatherIcon(node.rain_chance, node.sky_type)
+          }
+          const { Icon, color } = resolvedIcon
+          const rainColor = displayRain > 0.5 ? '#60a5fa' : displayRain > 0.2 ? '#93c5fd' : colors.textMuted
 
           const label = isNow
             ? 'NOW'
@@ -284,7 +310,7 @@ function ForecastPanel({ nodes, toDisplayTemp, tempLabel, nodeEta }: {
                   {toDisplayTemp(node.temperature).toFixed(0)}{tempLabel}
                 </span>
                 <span style={{ fontFamily: fonts.mono, fontSize: 13, color: rainColor, fontWeight: 700 }}>
-                  {(node.rain_chance * 100).toFixed(0)}%
+                  {(displayRain * 100).toFixed(0)}%
                 </span>
               </div>
             </div>
@@ -328,6 +354,7 @@ export default function WeatherWidget() {
   const airTempC       = weather?.air_temp          ?? 20
   const trackTempC     = weather?.track_temp        ?? 25
   const rainIntensity  = weather?.rain_intensity    ?? 0
+  const darkCloud      = weather?.dark_cloud        ?? 0
   const avgPathWetness = weather?.avg_path_wetness  ?? 0
   const forecast       = weather?.forecast          ?? []
 
@@ -335,7 +362,7 @@ export default function WeatherWidget() {
   const trackTemp = toDisplayTemp(trackTempC)
   const tempLabel = tempUnitLabel()
 
-  const { Icon: CurrentIcon, color: iconColor } = resolveWeatherIcon(rainIntensity)
+  const { Icon: CurrentIcon, color: iconColor } = resolveWeatherIcon(rainIntensity, undefined, darkCloud)
   const hasHistory = weatherHistory.length >= 3
 
   const wetState  = computeWetState(weatherHistory)
@@ -439,6 +466,8 @@ export default function WeatherWidget() {
             toDisplayTemp={toDisplayTemp}
             tempLabel={tempLabel}
             nodeEta={nodeEta}
+            liveRain={rainIntensity}
+            liveDarkCloud={darkCloud}
           />
         </>
       )}
