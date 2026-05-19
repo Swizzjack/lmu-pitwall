@@ -120,6 +120,13 @@ pub struct DamageState {
     pub last_impact_magnitude: f64,
 }
 
+/// Minimal weather forecast node passed to rules.
+#[derive(Debug, Clone)]
+pub struct ForecastNode {
+    /// Rain probability 0.0–1.0.
+    pub rain_chance: f32,
+}
+
 // ---------------------------------------------------------------------------
 // EngineerState — one telemetry snapshot used by all rules
 // ---------------------------------------------------------------------------
@@ -184,6 +191,10 @@ pub struct EngineerState {
     pub track_temp_c: f32,
     /// mRaining: 0.0 = dry, 1.0 = heavy rain
     pub rain_intensity: f32,
+    /// Total session duration in seconds (0.0 if unknown / lap-based session).
+    pub session_total_s: f32,
+    /// Up to 5 forecast nodes covering 0/25/50/75/100% of the session.
+    pub weather_forecast: Vec<ForecastNode>,
 
     /// Outstanding penalties (drive-through, stop-go, etc.)
     pub num_penalties: u32,
@@ -320,6 +331,7 @@ impl StateAggregator {
         fuel: &FuelSnapshot,
         safety_car_active: bool,
         ve_available: Option<bool>,
+        weather_forecast: &[crate::garage_api::WeatherForecastNode],
     ) -> EngineerState {
         let now = Instant::now();
 
@@ -565,6 +577,10 @@ impl StateAggregator {
         let ambient_temp_c = sc_info.map(|i| i.mAmbientTemp as f32).unwrap_or(20.0);
         let track_temp_c = sc_info.map(|i| i.mTrackTemp as f32).unwrap_or(25.0);
         let rain_intensity = sc_info.map(|i| i.mRaining as f32).unwrap_or(0.0);
+        let session_total_s = sc_info.map(|i| i.mEndET as f32).unwrap_or(0.0).max(0.0);
+        let weather_forecast: Vec<ForecastNode> = weather_forecast.iter()
+            .map(|n| ForecastNode { rain_chance: n.rain_chance as f32 })
+            .collect();
 
         // --- Penalties ---
         let num_penalties = player_sc.map(|v| v.mNumPenalties.max(0) as u32).unwrap_or(0);
@@ -662,6 +678,8 @@ impl StateAggregator {
             ambient_temp_c,
             track_temp_c,
             rain_intensity,
+            session_total_s,
+            weather_forecast,
             num_penalties,
             class_rivals_avg_last_lap,
             class_rivals_min_best_lap,

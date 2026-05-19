@@ -259,6 +259,18 @@ impl TemplateRegistry {
             "Conditions {condition}, {temp} degrees. Tires {tire_status}.",
             "{driver_name}, out of the pits. Track {condition}, {temp} degrees. Tires {tire_status}.",
         ]);
+        t.insert("rain_forecast_10min", &[
+            "Rain forecast in about {minutes} minutes. {chance} percent chance. Think about your strategy.",
+            "Heads up, rain expected in roughly {minutes} minutes. {chance} percent.",
+            "Weather's changing. Rain in around {minutes} minutes, {chance} percent chance.",
+            "{driver_name}, rain coming in {minutes} minutes. {chance} percent. Strategy call coming.",
+        ]);
+        t.insert("rain_forecast_5min", &[
+            "Rain in {minutes} minutes. Get ready.",
+            "Five minutes to rain. {chance} percent chance. Prepare yourself.",
+            "Rain imminent, {minutes} minutes out. {chance} percent. Box now or push.",
+            "{driver_name}, rain in {minutes} minutes. {chance} percent. Decision time.",
+        ]);
 
         Self { templates: t }
     }
