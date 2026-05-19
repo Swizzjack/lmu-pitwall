@@ -205,11 +205,13 @@ function formatEta(eta: NodeEta): string {
   return `${Math.round(minutes)} min${lapStr}`
 }
 
-function ForecastPanel({ nodes, toDisplayTemp, tempLabel, nodeEta }: {
+function ForecastPanel({ nodes, toDisplayTemp, tempLabel, nodeEta, liveRain, liveDarkCloud }: {
   nodes: WeatherForecastNode[]
   toDisplayTemp: (c: number) => number
   tempLabel: string
   nodeEta: NodeEta[]
+  liveRain: number
+  liveDarkCloud: number
 }) {
   if (nodes.length === 0) return null
   return (
@@ -222,7 +224,10 @@ function ForecastPanel({ nodes, toDisplayTemp, tempLabel, nodeEta }: {
         {nodes.map((node, i) => {
           const eta = nodeEta[i]
           if (i > 0 && eta.minutes <= 0) return null
-          const { Icon, color } = resolveWeatherIcon(node.rain_chance, node.sky_type)
+          // NOW tile uses live shared memory values — forecast node at t=0 is stale
+          const { Icon, color } = i === 0
+            ? resolveWeatherIcon(liveRain, undefined, liveDarkCloud)
+            : resolveWeatherIcon(node.rain_chance, node.sky_type)
           const rainColor = node.rain_chance > 0.5 ? '#60a5fa' : node.rain_chance > 0.2 ? '#93c5fd' : colors.textMuted
           const isNow = i === 0
           const label = isNow ? 'NOW' : formatEta(eta)
@@ -471,6 +476,8 @@ export default function WeatherWidget() {
             toDisplayTemp={toDisplayTemp}
             tempLabel={tempLabel}
             nodeEta={nodeEta}
+            liveRain={rainIntensity}
+            liveDarkCloud={darkCloud}
           />
         </>
       )}
