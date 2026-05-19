@@ -33,3 +33,8 @@ config.json
 
 # Claude
 .claude/
+
+# Local agent instructions (not public)
+AGENTS.md
+.pi/
+.claude.json

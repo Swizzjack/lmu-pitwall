@@ -135,6 +135,7 @@ export default function Standings() {
   const settingShowCompound = useSettingsStore((s) => s.standingsShowCompound)
   const settingShowCarType  = useSettingsStore((s) => s.standingsShowCarType)
   const settingShowVE       = useSettingsStore((s) => s.standingsShowVE)
+  const settingShowDamage   = useSettingsStore((s) => s.standingsShowDamage)
 
   const isRace = sessionType?.toLowerCase().includes('race') ?? false
 
@@ -206,7 +207,7 @@ export default function Standings() {
     }
     return map
   }, [allDrivers])
-  const hasDamageData = [...damageById.values()].some(s => s.some(v => v > 0))
+  const hasDamageData = settingShowDamage && [...damageById.values()].some(s => s.some(v => v > 0))
 
   // Session best per sector and lap (minimum across all vehicles with valid data)
   const validNums = (arr: number[]) => arr.filter((x) => x > 0)

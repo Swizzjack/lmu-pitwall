@@ -94,7 +94,7 @@ export const WIDGET_REGISTRY: Record<string, WidgetMeta> = {
     id: 'WeatherWidget',
     name: 'Weather',
     component: WeatherWidget,
-    defaultSize: { w: 3, h: 3 },
+    defaultSize: { w: 3, h: 6 },
     minSize: { w: 2, h: 2 },
   },
   ConnectionStatus: {

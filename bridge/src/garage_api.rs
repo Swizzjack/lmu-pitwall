@@ -191,7 +191,18 @@ mod imp {
                 let rain_raw    = node.get("WNV_RAIN_CHANCE")?.get("currentValue")?.as_f64()?;
                 // LMU returns rain chance as a percentage (0–100); normalise to 0.0–1.0.
                 let rain_chance = (rain_raw * 0.01).clamp(0.0, 1.0);
-                Some(WeatherForecastNode { sky_type, temperature, rain_chance })
+                // Optional fields — present in the API but not yet shown in the UI.
+                let humidity = node.get("WNV_HUMIDITY")
+                    .and_then(|v| v.get("currentValue"))
+                    .and_then(|v| v.as_f64());
+                let wind_direction = node.get("WNV_WINDDIRECTION")
+                    .and_then(|v| v.get("currentValue"))
+                    .and_then(|v| v.as_f64())
+                    .map(|v| v as i32);
+                let wind_speed = node.get("WNV_WINDSPEED")
+                    .and_then(|v| v.get("currentValue"))
+                    .and_then(|v| v.as_f64());
+                Some(WeatherForecastNode { sky_type, temperature, rain_chance, humidity, wind_direction, wind_speed })
             })
             .collect();
 

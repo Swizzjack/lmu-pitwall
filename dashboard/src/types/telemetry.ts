@@ -21,13 +21,18 @@ export interface WeatherForecastNode {
   sky_type: number      // 0=clear … 10=heavy rain
   temperature: number   // Celsius
   rain_chance: number   // 0.0–1.0
+  // Optional — parsed from REST API, not yet displayed in widget
+  humidity?: number        // 0–100 %
+  wind_direction?: number  // 0=N, 1=NE, 2=E, 3=SE, 4=S, 5=SW, 6=W, 7=NW
+  wind_speed?: number      // m/s
 }
 
 export interface WeatherData {
   air_temp: number
   track_temp: number
   rain_intensity: number
-  dark_cloud: number          // 0.0–1.0 cloud coverage
+  dark_cloud: number      // 0.0–1.0 (mDarkCloud — unreliable in LMU)
+  cloudiness: number      // 0.0–1.0 derived from REST API sky_type (reliable)
   forecast: WeatherForecastNode[]
 }
 

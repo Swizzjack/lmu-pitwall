@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect } from 'react'
 import { useSettingsStore, SETTINGS_DEFAULTS } from '../stores/settingsStore'
-import type { FpsLimit, InputChartFps, SpeedUnit, TempUnit, PressureUnit, FuelUnit, ClockFormat, DamageDetail } from '../stores/settingsStore'
+import type { FpsLimit, InputChartFps, SpeedUnit, TempUnit, PressureUnit, FuelUnit, ClockFormat, DamageDetail, WeatherDetail } from '../stores/settingsStore'
 import { colors, fonts } from '../styles/theme'
 
 interface Props {
@@ -302,6 +302,21 @@ export default function Settings({ open, onClose }: Props) {
             </Row>
           </Section>
 
+          {/* Weather Widget */}
+          <Section title="Weather Widget">
+            <Row label="Detail Level">
+              <SegmentControl
+                value={s.weatherDetail}
+                options={[
+                  { value: 'compact', label: 'Compact' },
+                  { value: 'medium', label: 'Medium' },
+                  { value: 'full', label: 'Full' },
+                ] as { value: WeatherDetail; label: string }[]}
+                onChange={(v) => s.update({ weatherDetail: v as WeatherDetail })}
+              />
+            </Row>
+          </Section>
+
           {/* Damage Widget */}
           <Section title="Damage Widget">
             <Row label="Detail Level">
@@ -338,6 +353,13 @@ export default function Settings({ open, onClose }: Props) {
                 value={s.standingsShowVE ? 'on' : 'off'}
                 options={[{ value: 'on', label: 'On' }, { value: 'off', label: 'Off' }]}
                 onChange={(v) => s.update({ standingsShowVE: v === 'on' })}
+              />
+            </Row>
+            <Row label="Damage">
+              <SegmentControl
+                value={s.standingsShowDamage ? 'on' : 'off'}
+                options={[{ value: 'on', label: 'On' }, { value: 'off', label: 'Off' }]}
+                onChange={(v) => s.update({ standingsShowDamage: v === 'on' })}
               />
             </Row>
           </Section>

@@ -9,6 +9,7 @@ export type FpsLimit = 0 | 30 | 60
 export type InputChartFps = 60 | 30 | 15
 export type ClockFormat = '12h' | '24h'
 export type DamageDetail = 'compact' | 'medium' | 'full'
+export type WeatherDetail = 'compact' | 'medium' | 'full'
 
 export interface SettingsState {
   speedUnit: SpeedUnit
@@ -33,8 +34,11 @@ export interface SettingsState {
   standingsShowCompound: boolean
   standingsShowCarType: boolean
   standingsShowVE: boolean
+  standingsShowDamage: boolean
   // Damage Widget
   damageDetail: DamageDetail
+  // Weather Widget
+  weatherDetail: WeatherDetail
   // Post Race Results
   resultsPath: string
 }
@@ -78,8 +82,11 @@ export const SETTINGS_DEFAULTS: SettingsState = {
   standingsShowCompound: true,
   standingsShowCarType: true,
   standingsShowVE: true,
+  standingsShowDamage: true,
   // Damage Widget
   damageDetail: 'full',
+  // Weather Widget
+  weatherDetail: 'full',
   // Post Race Results
   resultsPath: '',
 }
@@ -96,10 +103,10 @@ export const useSettingsStore = create<SettingsStore>()(
       exportSettings: () => {
         const { speedUnit, tempUnit, pressureUnit, fuelUnit, lapReserve, wsHost, wsPort, primaryColor, accentColor, fpsLimit, inputChartFps,
           timeWidgetShowComputerTime, timeWidgetClockFormat, timeWidgetShowSessionElapsed, timeWidgetShowTimeRemaining, timeWidgetShowCurrentLap,
-          standingsShowCompound, standingsShowCarType, standingsShowVE, damageDetail, resultsPath } = get()
+          standingsShowCompound, standingsShowCarType, standingsShowVE, standingsShowDamage, damageDetail, weatherDetail, resultsPath } = get()
         return JSON.stringify({ speedUnit, tempUnit, pressureUnit, fuelUnit, lapReserve, wsHost, wsPort, primaryColor, accentColor, fpsLimit, inputChartFps,
           timeWidgetShowComputerTime, timeWidgetClockFormat, timeWidgetShowSessionElapsed, timeWidgetShowTimeRemaining, timeWidgetShowCurrentLap,
-          standingsShowCompound, standingsShowCarType, standingsShowVE, damageDetail, resultsPath }, null, 2)
+          standingsShowCompound, standingsShowCarType, standingsShowVE, standingsShowDamage, damageDetail, weatherDetail, resultsPath }, null, 2)
       },
 
       importSettings: (json) => {
@@ -125,7 +132,9 @@ export const useSettingsStore = create<SettingsStore>()(
           if (typeof data.standingsShowCompound === 'boolean') valid.standingsShowCompound = data.standingsShowCompound
           if (typeof data.standingsShowCarType === 'boolean') valid.standingsShowCarType = data.standingsShowCarType
           if (typeof data.standingsShowVE === 'boolean') valid.standingsShowVE = data.standingsShowVE
+          if (typeof data.standingsShowDamage === 'boolean') valid.standingsShowDamage = data.standingsShowDamage
           if (data.damageDetail === 'compact' || data.damageDetail === 'medium' || data.damageDetail === 'full') valid.damageDetail = data.damageDetail
+          if (data.weatherDetail === 'compact' || data.weatherDetail === 'medium' || data.weatherDetail === 'full') valid.weatherDetail = data.weatherDetail
           if (typeof data.resultsPath === 'string') valid.resultsPath = data.resultsPath
           set(valid)
           return true

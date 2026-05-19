@@ -275,6 +275,11 @@ fn build_electronics_update(snap: &ElectronicsSnapshot) -> ServerMessage {
 
 fn build_session_info(sc: &rF2ScoringBuffer, forecast: Vec<garage_api::WeatherForecastNode>) -> ServerMessage {
     let info = &sc.mScoringInfo;
+    // mDarkCloud is unreliable in LMU (often stuck at 0). Derive cloudiness from the
+    // START node's sky_type instead (0=clear…10=heavy overcast+storm → 0.0–1.0).
+    let cloudiness = forecast.first()
+        .map(|n| (n.sky_type as f64 / 10.0).clamp(0.0, 1.0))
+        .unwrap_or(info.mDarkCloud);
     ServerMessage::SessionInfo {
         track_name:      bytes_to_str(&info.mTrackName).to_string(),
         track_length:    info.mLapDist,
@@ -283,6 +288,7 @@ fn build_session_info(sc: &rF2ScoringBuffer, forecast: Vec<garage_api::WeatherFo
             track_temp:     info.mTrackTemp,
             rain_intensity: info.mRaining,
             dark_cloud:     info.mDarkCloud,
+            cloudiness,
             forecast,
         },
         // Filter mMaxLaps: time-based races use 999999, uninitialized can be INT32_MAX.
