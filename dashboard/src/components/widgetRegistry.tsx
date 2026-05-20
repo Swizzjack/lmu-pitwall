@@ -17,6 +17,7 @@ import TrackMap from './widgets/TrackMap'
 import LapHistory from './widgets/LapHistory'
 import TimeWidget from './widgets/TimeWidget'
 import Flags from './widgets/Flags'
+import RelativeTiming from './widgets/RelativeTiming'
 
 export interface WidgetMeta {
   id: string
@@ -152,5 +153,12 @@ export const WIDGET_REGISTRY: Record<string, WidgetMeta> = {
     component: Flags,
     defaultSize: { w: 3, h: 3 },
     minSize: { w: 2, h: 2 },
+  },
+  RelativeTiming: {
+    id: 'RelativeTiming',
+    name: 'Relative Timing',
+    component: RelativeTiming,
+    defaultSize: { w: 5, h: 4 },
+    minSize: { w: 4, h: 3 },
   },
 }
