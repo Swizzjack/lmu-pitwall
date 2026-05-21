@@ -31,7 +31,10 @@ export interface WeatherData {
   air_temp: number
   track_temp: number
   rain_intensity: number
-  dark_cloud: number      // 0.0–1.0 (mDarkCloud — unreliable in LMU)
+  dark_cloud: number          // 0.0–1.0 cloud coverage (mDarkCloud)
+  avg_path_wetness: number    // actual water on racing line 0.0–1.0 (mAvgPathWetness)
+  min_path_wetness: number    // minimum wetness on racing line
+  max_path_wetness: number    // maximum wetness on racing line
   cloudiness: number      // 0.0–1.0 derived from REST API sky_type (reliable)
   forecast: WeatherForecastNode[]
 }

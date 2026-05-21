@@ -30,6 +30,7 @@ export interface WeatherSnapshot {
   track_temp: number
   air_temp: number
   dark_cloud: number
+  avg_path_wetness: number  // actual water on track 0.0–1.0
 }
 
 // ---------------------------------------------------------------------------
@@ -394,6 +395,7 @@ export const useTelemetryStore = create<TelemetryStore>((set) => ({
                 track_temp:     msg.weather.track_temp,
                 air_temp:       msg.weather.air_temp,
                 dark_cloud:     msg.weather.dark_cloud,
+                avg_path_wetness:  msg.weather.avg_path_wetness,
               }
               weatherHistory = [...weatherHistory, snap].slice(-MAX_HISTORY)
             }
