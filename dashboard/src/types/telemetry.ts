@@ -36,6 +36,8 @@ export interface WeatherData {
   min_path_wetness: number    // minimum wetness on racing line
   max_path_wetness: number    // maximum wetness on racing line
   cloudiness: number      // 0.0–1.0 derived from REST API sky_type (reliable)
+  wind_speed_live?: number    // horizontal wind speed m/s from live mWind; absent when calm
+  wind_rel_deg?: number       // wind angle relative to car nose: 0=headwind, ±180=tailwind, ±90=crosswind
   forecast: WeatherForecastNode[]
 }
 
@@ -160,6 +162,7 @@ export interface TelemetryUpdate {
   fuel_avg_lap_time: number       // rolling median lap time (s); 0 = no valid data yet
   ve_history: number[] | null     // per-lap VE values from REST API (0–1 each); null = unavailable
   ve_available: boolean | null    // true if car supports VE; null = not yet determined
+  heading_deg: number             // world heading in degrees, 0=N, clockwise (from mOri[2])
 }
 
 export interface ScoringUpdate {

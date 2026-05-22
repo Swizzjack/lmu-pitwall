@@ -71,6 +71,7 @@ interface TelemetrySection {
   fuel_avg_lap_time: number
   ve_history: number[] | null
   ve_available: boolean | null
+  heading_deg: number
 }
 
 interface ScoringSection {
@@ -178,6 +179,7 @@ const defaultTelemetry: TelemetrySection = {
   fuel_avg_lap_time: 0,
   ve_history: null,
   ve_available: null,
+  heading_deg: 0,
 }
 
 const defaultScoring: ScoringSection = {
@@ -328,6 +330,7 @@ export const useTelemetryStore = create<TelemetryStore>((set) => ({
             fuel_avg_lap_time: msg.fuel_avg_lap_time,
             ve_history: msg.ve_history ?? null,
             ve_available: msg.ve_available ?? null,
+            heading_deg: msg.heading_deg,
           },
         })
         break
