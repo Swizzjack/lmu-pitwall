@@ -7,6 +7,7 @@
 # Node
 /dashboard/node_modules/
 /dashboard/dist/
+.npm/
 
 # IDE
 .vscode/
