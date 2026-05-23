@@ -2,6 +2,7 @@ import { useEffect, useRef, useCallback } from 'react'
 import { decode } from '@msgpack/msgpack'
 import { useTelemetryStore } from '../stores/telemetryStore'
 import { useSettingsStore } from '../stores/settingsStore'
+import { bridgeWsUrl } from '../utils/bridge'
 import type { ServerMessage } from '../types/telemetry'
 
 export type ConnectionStatus = 'connected' | 'disconnected' | 'reconnecting'
@@ -9,12 +10,6 @@ export type ConnectionStatus = 'connected' | 'disconnected' | 'reconnecting'
 const BASE_DELAY_MS = 1000
 const MAX_DELAY_MS = 30_000
 const JITTER_MS = 500
-
-function buildWsUrl(): string {
-  const { wsHost, wsPort } = useSettingsStore.getState()
-  const host = wsHost.trim() || window.location.hostname
-  return `ws://${host}:${wsPort}`
-}
 
 export function useWebSocket() {
   const wsRef = useRef<WebSocket | null>(null)
@@ -25,10 +20,14 @@ export function useWebSocket() {
   const setConnection = useTelemetryStore((s) => s.setConnection)
   const applyMessage = useTelemetryStore((s) => s.applyMessage)
 
+  // Subscribe to host/port so a settings change triggers a reconnect.
+  const wsHost = useSettingsStore((s) => s.wsHost)
+  const wsPort = useSettingsStore((s) => s.wsPort)
+
   const connect = useCallback(() => {
     if (!mountedRef.current) return
 
-    const url = buildWsUrl()
+    const url = bridgeWsUrl()
     const ws = new WebSocket(url)
     wsRef.current = ws
     ws.binaryType = 'arraybuffer'
@@ -78,10 +77,11 @@ export function useWebSocket() {
         connect()
       }, delay)
     }
-  }, [setConnection, applyMessage])
+  }, [setConnection, applyMessage, wsHost, wsPort])
 
   useEffect(() => {
     mountedRef.current = true
+    reconnectAttemptRef.current = 0
     connect()
 
     return () => {

@@ -2,6 +2,7 @@ import { useRef, useState, useEffect } from 'react'
 import { useSettingsStore, SETTINGS_DEFAULTS } from '../stores/settingsStore'
 import type { FpsLimit, InputChartFps, SpeedUnit, TempUnit, PressureUnit, FuelUnit, ClockFormat, DamageDetail, WeatherDetail } from '../stores/settingsStore'
 import { colors, fonts } from '../styles/theme'
+import { bridgeHttpBase } from '../utils/bridge'
 
 interface Props {
   open: boolean
@@ -56,6 +57,44 @@ export default function Settings({ open, onClose }: Props) {
   useEffect(() => {
     if (open) setSavedTracks(getSavedTracks())
   }, [open])
+
+  // Port "Save & Restart" state
+  const [portInput, setPortInput] = useState<string>(() => s.wsPort > 0 ? String(s.wsPort) : '')
+  const [portBusy, setPortBusy] = useState(false)
+  const [portStatus, setPortStatus] = useState<string | null>(null)
+
+  useEffect(() => {
+    // Sync portInput if external wsPort changes (e.g. importSettings)
+    setPortInput(s.wsPort > 0 ? String(s.wsPort) : '')
+  }, [s.wsPort])
+
+  async function saveAndRestart() {
+    const newPort = portInput === '' ? 0 : parseInt(portInput, 10)
+    if (portInput !== '' && (isNaN(newPort) || newPort < 1024 || newPort > 65535)) {
+      setPortStatus('Port must be between 1024 and 65535.')
+      return
+    }
+    const targetPort = newPort > 0 ? newPort : parseInt(window.location.port || '9000', 10)
+    setPortBusy(true)
+    setPortStatus(null)
+    try {
+      const res = await fetch(`${bridgeHttpBase()}/api/set-port`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ port: targetPort }),
+      })
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      // Keep wsPort at 0 (auto) — frontend follows the URL port.
+      s.update({ wsPort: 0 })
+      const url = new URL(window.location.href)
+      url.port = String(targetPort)
+      setTimeout(() => { window.location.href = url.toString() }, 1500)
+      setPortStatus('Restarting…')
+    } catch (e) {
+      setPortStatus(`Error: ${e instanceof Error ? e.message : String(e)}`)
+      setPortBusy(false)
+    }
+  }
 
   if (!open) return null
 
@@ -197,17 +236,49 @@ export default function Settings({ open, onClose }: Props) {
               />
             </Row>
             <Row label="Bridge Port">
-              <input
-                type="number"
-                value={s.wsPort}
-                min={1}
-                max={65535}
-                onChange={(e) => s.update({ wsPort: Number(e.target.value) })}
-                style={{ ...inputStyle, width: 80 }}
-              />
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <input
+                  type="number"
+                  value={portInput}
+                  min={1024}
+                  max={65535}
+                  placeholder="auto"
+                  onChange={(e) => { setPortInput(e.target.value); setPortStatus(null) }}
+                  style={{ ...inputStyle, width: 80 }}
+                  disabled={portBusy}
+                />
+                <button
+                  onClick={saveAndRestart}
+                  disabled={portBusy}
+                  style={{
+                    ...btnStyle,
+                    background: portBusy ? colors.border : colors.primary,
+                    color: portBusy ? colors.textMuted : '#000',
+                    fontFamily: fonts.body,
+                    fontSize: 13,
+                    padding: '4px 10px',
+                    cursor: portBusy ? 'not-allowed' : 'pointer',
+                    borderRadius: 4,
+                    border: 'none',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {portBusy ? 'Restarting…' : 'Save & Restart'}
+                </button>
+              </div>
+              {portStatus && (
+                <p style={{
+                  fontFamily: fonts.body,
+                  fontSize: 13,
+                  color: portStatus.startsWith('Error') ? '#f87171' : colors.textMuted,
+                  margin: '4px 0 0',
+                }}>
+                  {portStatus}
+                </p>
+              )}
             </Row>
             <p style={{ fontFamily: fonts.body, fontSize: 15, color: colors.textMuted, margin: 0 }}>
-              Changes take effect on next reconnect or page refresh.
+              Leave port empty to auto-follow the bridge URL. "Save & Restart" writes the port to the bridge config and restarts.
             </p>
           </Section>
 

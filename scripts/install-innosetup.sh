@@ -1,0 +1,85 @@
+#!/usr/bin/env bash
+# One-time setup: installs Inno Setup 6 under Wine so release.sh can build the
+# Windows installer on Linux without WSL or a Windows machine.
+#
+# Usage: ./scripts/install-innosetup.sh
+#
+# Requirements:
+#   - wine    (Fedora: sudo dnf install wine)
+#   - curl
+#   - winetricks or wine64 (either wine/wine64 works; winetricks is optional)
+#
+# After this script succeeds once, running release.sh will automatically build
+# LMU-Pitwall-Setup-x.x.x.exe alongside the standalone lmu-pitwall.exe.
+set -euo pipefail
+
+ISCC="$HOME/.wine/drive_c/Program Files (x86)/Inno Setup 6/ISCC.exe"
+CACHE_DIR="$HOME/.cache/lmu-pitwall"
+INSTALLER_EXE="$CACHE_DIR/innosetup-installer.exe"
+INNOSETUP_URL="https://github.com/jrsoftware/issrc/releases/download/is-6_7_1/innosetup-6.7.1.exe"
+
+# ── Pre-flight ─────────────────────────────────────────────────────────────
+if ! command -v wine >/dev/null 2>&1; then
+  echo "ERROR: wine is not installed."
+  echo "  Fedora:  sudo dnf install wine"
+  echo "  Ubuntu:  sudo apt install wine"
+  exit 1
+fi
+
+if [[ -f "$ISCC" ]]; then
+  echo "Inno Setup is already installed under Wine."
+  echo "  $ISCC"
+  echo ""
+  echo "To reinstall, remove the Wine prefix first:"
+  echo "  rm -rf \$HOME/.wine"
+  exit 0
+fi
+
+echo "=== Installing Inno Setup 6 under Wine ==="
+echo ""
+
+# ── Download ──────────────────────────────────────────────────────────────
+mkdir -p "$CACHE_DIR"
+if [[ -f "$INSTALLER_EXE" ]]; then
+  echo "Installer already cached at $INSTALLER_EXE"
+else
+  echo "Downloading Inno Setup installer..."
+  curl -fL --progress-bar -o "$INSTALLER_EXE" "$INNOSETUP_URL"
+  echo ""
+fi
+
+# ── Install ───────────────────────────────────────────────────────────────
+echo "Installing into Wine prefix (~/.wine)..."
+echo "(This may take a minute on first Wine init)"
+echo ""
+echo "Initializing Wine prefix (first run takes ~30s)..."
+WINEDEBUG=-all wineboot --init >/dev/null 2>&1
+wineserver -w
+echo ""
+
+WINEDEBUG=-all wine "$INSTALLER_EXE" \
+  /VERYSILENT /SUPPRESSMSGBOXES /NORESTART \
+  /NOICONS
+wineserver -w
+echo ""
+
+# ── Verify ────────────────────────────────────────────────────────────────
+if [[ ! -f "$ISCC" ]]; then
+  echo "ERROR: ISCC.exe not found after installation."
+  echo "  Expected: $ISCC"
+  echo ""
+  echo "If Inno Setup installed to a different version path, update ISCC_WINE in release.sh."
+  exit 1
+fi
+
+echo "Verifying ISCC.exe..."
+WINEDEBUG=-all wine "$ISCC" /? 2>/dev/null | head -3 || true
+echo ""
+echo "============================================"
+echo "  Inno Setup installed successfully."
+echo ""
+echo "  ISCC: $ISCC"
+echo ""
+echo "  You can now run:"
+echo "    ./scripts/release.sh"
+echo "============================================"

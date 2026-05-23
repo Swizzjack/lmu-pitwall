@@ -66,7 +66,7 @@ export const SETTINGS_DEFAULTS: SettingsState = {
   fuelUnit: 'liters',
   lapReserve: 0.5,
   wsHost: '',
-  wsPort: 9000,
+  wsPort: 0,
   primaryColor: '#facc15',
   accentColor: '#f97316',
   fpsLimit: 0,
@@ -119,7 +119,7 @@ export const useSettingsStore = create<SettingsStore>()(
           if (data.fuelUnit === 'liters' || data.fuelUnit === 'gallons') valid.fuelUnit = data.fuelUnit
           if (typeof data.lapReserve === 'number' && data.lapReserve >= 0 && data.lapReserve <= 5) valid.lapReserve = data.lapReserve
           if (typeof data.wsHost === 'string') valid.wsHost = data.wsHost
-          if (typeof data.wsPort === 'number' && data.wsPort > 0 && data.wsPort < 65536) valid.wsPort = data.wsPort
+          if (typeof data.wsPort === 'number' && data.wsPort >= 0 && data.wsPort < 65536) valid.wsPort = data.wsPort
           if (typeof data.primaryColor === 'string') valid.primaryColor = data.primaryColor
           if (typeof data.accentColor === 'string') valid.accentColor = data.accentColor
           if (data.fpsLimit === 0 || data.fpsLimit === 30 || data.fpsLimit === 60) valid.fpsLimit = data.fpsLimit

@@ -143,6 +143,58 @@ async fn handle_http(mut stream: TcpStream, port: u16) -> Result<()> {
         std::process::exit(0);
     }
 
+    if path == "/api/set-port" && method == "POST" {
+        let cors = [
+            ("Access-Control-Allow-Origin", "*"),
+            ("Access-Control-Allow-Methods", "POST, OPTIONS"),
+        ];
+
+        // Parse Content-Length header and extract body.
+        let body_start = request_str.find("\r\n\r\n").map(|i| i + 4).unwrap_or(request.len());
+        let content_length: usize = request_str
+            .lines()
+            .find(|l| l.to_lowercase().starts_with("content-length:"))
+            .and_then(|l| l.split(':').nth(1))
+            .and_then(|v| v.trim().parse().ok())
+            .unwrap_or(0);
+        let body_bytes = &request[body_start..(body_start + content_length).min(request.len())];
+
+        #[derive(serde::Deserialize)]
+        struct SetPortRequest { port: u16 }
+
+        let parsed = serde_json::from_slice::<SetPortRequest>(body_bytes);
+        match parsed {
+            Ok(req) if req.port >= 1024 => {
+                if let Err(e) = crate::app_config::AppConfig::set_port(req.port) {
+                    let msg = format!("{{\"ok\":false,\"error\":\"{}\"}}", e);
+                    send_response(&mut stream, 500, "application/json", msg.as_bytes(), &cors).await?;
+                    return Ok(());
+                }
+                let body = format!("{{\"ok\":true,\"port\":{}}}", req.port);
+                send_response(&mut stream, 200, "application/json", body.as_bytes(), &cors).await?;
+                // Spawn detached child with new port, then exit.
+                if let Ok(exe) = std::env::current_exe() {
+                    let mut cmd = std::process::Command::new(exe);
+                    cmd.arg("--no-browser");
+                    #[cfg(target_os = "windows")]
+                    {
+                        use std::os::windows::process::CommandExt;
+                        const DETACHED_PROCESS: u32 = 0x00000008;
+                        const CREATE_NEW_PROCESS_GROUP: u32 = 0x00000200;
+                        cmd.creation_flags(DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP);
+                    }
+                    let _ = cmd.spawn();
+                }
+                std::process::exit(0);
+            }
+            _ => {
+                send_response(&mut stream, 400, "application/json",
+                    b"{\"ok\":false,\"error\":\"port must be 1024-65535\"}", &cors).await?;
+            }
+        }
+        return Ok(());
+    }
+
     serve_static(&mut stream, &path).await
 }
 

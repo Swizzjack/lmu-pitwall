@@ -1,5 +1,5 @@
 import { decode } from '@msgpack/msgpack'
-import { useSettingsStore } from '../../../stores/settingsStore'
+import { bridgeWsUrl } from '../../../utils/bridge'
 import type { EngineerCommand, EngineerMessage } from '../types'
 import { connectWithEffect, type RadioEffectMode } from './radioEffect'
 import { PriorityQueue } from './priorityQueue'
@@ -63,9 +63,7 @@ class AudioEngineerService {
   // ── WebSocket ──────────────────────────────────────────────────────────────
 
   private getWsUrl(): string {
-    const { wsHost, wsPort } = useSettingsStore.getState()
-    const host = (wsHost || '').trim() || window.location.hostname
-    return `ws://${host}:${wsPort}`
+    return bridgeWsUrl()
   }
 
   private connect() {

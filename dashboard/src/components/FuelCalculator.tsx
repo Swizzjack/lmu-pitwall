@@ -1,7 +1,7 @@
 import { useState, useRef, useCallback, useEffect } from 'react'
 import { decode } from '@msgpack/msgpack'
 import { colors, fonts } from '../styles/theme'
-import { useSettingsStore } from '../stores/settingsStore'
+import { bridgeWsUrl } from '../utils/bridge'
 
 // ── Types (matching bridge/src/fuel_calculator/types.rs) ─────────────────────
 
@@ -286,9 +286,7 @@ export default function FuelCalculator({ onClose }: { onClose: () => void }) {
   }
 
   useEffect(() => {
-    const { wsHost, wsPort } = useSettingsStore.getState()
-    const host = (wsHost || '').trim() || window.location.hostname
-    const url = `ws://${host}:${wsPort}`
+    const url = bridgeWsUrl()
     const ws = new WebSocket(url)
     wsRef.current = ws
     ws.binaryType = 'arraybuffer'
@@ -582,7 +580,7 @@ export default function FuelCalculator({ onClose }: { onClose: () => void }) {
           <button
             onClick={() => adjustScale(-SCALE_STEP)}
             disabled={scale <= SCALE_MIN}
-            title="Kleiner"
+            title="Scale down"
             style={{
               width: 20, height: 20, display: 'flex', alignItems: 'center', justifyContent: 'center',
               background: 'transparent', border: `1px solid ${scale <= SCALE_MIN ? '#333' : colors.border}`,
@@ -596,7 +594,7 @@ export default function FuelCalculator({ onClose }: { onClose: () => void }) {
           <button
             onClick={() => adjustScale(SCALE_STEP)}
             disabled={scale >= SCALE_MAX}
-            title="Grösser"
+            title="Scale up"
             style={{
               width: 20, height: 20, display: 'flex', alignItems: 'center', justifyContent: 'center',
               background: 'transparent', border: `1px solid ${scale >= SCALE_MAX ? '#333' : colors.border}`,
