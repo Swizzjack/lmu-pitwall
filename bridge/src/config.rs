@@ -3,9 +3,9 @@ use clap::Parser;
 #[derive(Parser, Debug)]
 #[command(name = "lmu-bridge", about = "Le Mans Ultimate Data Bridge")]
 pub struct Config {
-    /// WebSocket server port
-    #[arg(long, default_value_t = 9000)]
-    pub ws_port: u16,
+    /// WebSocket server port (overrides config.json when provided)
+    #[arg(long)]
+    pub ws_port: Option<u16>,
 
     /// Telemetry broadcast rate in FPS
     #[arg(long, default_value_t = 20)]

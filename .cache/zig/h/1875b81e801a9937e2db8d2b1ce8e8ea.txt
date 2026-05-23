@@ -1,0 +1,2 @@
+0
+2172 2666525 1777725347000000000 e4971fa25a51380a5d89432995584334 1 libc/mingw/lib-common/api-ms-win-crt-filesystem-l1-1-0.def.in

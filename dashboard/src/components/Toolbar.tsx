@@ -4,14 +4,15 @@ import { useTelemetryStore } from '../stores/telemetryStore'
 import { useSettingsStore } from '../stores/settingsStore'
 import { WIDGET_REGISTRY } from './widgetRegistry'
 import { colors, fonts } from '../styles/theme'
+import { bridgeHttpBase } from '../utils/bridge'
 
 function NetworkBadge() {
-  const { wsHost, wsPort } = useSettingsStore()
+  const wsHost = useSettingsStore((s) => s.wsHost)
+  const wsPort = useSettingsStore((s) => s.wsPort)
   const [address, setAddress] = useState<string | null>(null)
 
   useEffect(() => {
-    const host = wsHost.trim() || window.location.hostname
-    fetch(`http://${host}:${wsPort}/api/network-info`)
+    fetch(`${bridgeHttpBase()}/api/network-info`)
       .then((r) => r.json())
       .then((data: { ip: string; port: number }) => setAddress(`${data.ip}:${data.port}`))
       .catch(() => {})
@@ -21,7 +22,7 @@ function NetworkBadge() {
 
   return (
     <span
-      title="Tablet-Adresse: Diese IP im Browser des Tablets eingeben"
+      title="Network address — open this in your tablet's browser"
       style={{
         fontFamily: fonts.body,
         fontSize: 13,
