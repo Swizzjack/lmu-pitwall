@@ -1,2 +1,0 @@
-0
-335 2666533 1777725347000000000 ecce03814bc6c8ace0e0111e268ccd31 1 libc/mingw/lib-common/api-ms-win-crt-utility-l1-1-0.def

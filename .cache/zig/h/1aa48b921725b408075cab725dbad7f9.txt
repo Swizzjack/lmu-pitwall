@@ -1,2 +1,0 @@
-0
-1998 2666972 1777725347000000000 5bfb1970856af0ebcbe2ae12d223c68a 1 libc/mingw/lib-common/userenv.def

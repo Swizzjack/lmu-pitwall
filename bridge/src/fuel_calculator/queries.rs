@@ -140,22 +140,23 @@ pub fn get_options(conn: &Connection) -> Result<FuelCalcOptions> {
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
 
-    // Query FuelMult data: distinct values per track+car, ordered by most recent first.
-    // GROUP BY (track_venue, car_type, fuel_mult) then order by MAX(date_time) DESC
-    // so the first row per track+car is the default (most recent) FuelMult.
+    // Query FuelMult data: distinct values per track+course+car, ordered by most recent first.
+    // GROUP BY (track_venue, track_course, car_type, fuel_mult) then order by MAX(date_time) DESC
+    // so the first row per track+course+car is the default (most recent) FuelMult.
     let mut fm_stmt = conn.prepare(
-        &format!("SELECT s.track_venue, d.car_type, s.fuel_mult, MAX(s.date_time) AS latest_dt
+        &format!("SELECT s.track_venue, s.track_course, d.car_type, s.fuel_mult, MAX(s.date_time) AS latest_dt
          FROM sessions s
          JOIN drivers d ON d.session_id = s.id AND d.is_player = 1
          WHERE {sess}
            AND s.fuel_mult IS NOT NULL
-         GROUP BY s.track_venue, d.car_type, s.fuel_mult
-         ORDER BY s.track_venue, d.car_type, latest_dt DESC",
+         GROUP BY s.track_venue, s.track_course, d.car_type, s.fuel_mult
+         ORDER BY s.track_venue, s.track_course, d.car_type, latest_dt DESC",
          sess = session_type_sql(true)),
     )?;
 
     struct FmRow {
         track_venue: String,
+        track_course: Option<String>,
         car_type: Option<String>,
         fuel_mult: f64,
     }
@@ -164,20 +165,21 @@ pub fn get_options(conn: &Connection) -> Result<FuelCalcOptions> {
         .query_map([], |row| {
             Ok(FmRow {
                 track_venue: row.get(0)?,
-                car_type: row.get(1)?,
-                fuel_mult: row.get(2)?,
+                track_course: row.get(1)?,
+                car_type: row.get(2)?,
+                fuel_mult: row.get(3)?,
             })
         })?
         .filter_map(|r| r.ok())
         .collect();
 
-    // Build lookup: (track_venue, car_type) → (options_ascending, default_fuel_mult)
+    // Build lookup: (track_venue, track_course, car_type) → (options_ascending, default_fuel_mult)
     // The fm_rows are ordered by latest_dt DESC, so the first occurrence per key = default.
     // options_ascending is sorted afterward.
-    let mut fm_map: HashMap<(String, Option<String>), (Vec<f64>, Option<f64>)> =
+    let mut fm_map: HashMap<(String, Option<String>, Option<String>), (Vec<f64>, Option<f64>)> =
         HashMap::new();
     for row in fm_rows {
-        let key = (row.track_venue, row.car_type);
+        let key = (row.track_venue, row.track_course, row.car_type);
         let entry = fm_map.entry(key).or_default();
         if entry.1.is_none() {
             // First = most recent
@@ -190,10 +192,14 @@ pub fn get_options(conn: &Connection) -> Result<FuelCalcOptions> {
         opts.sort_by(|a, b| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal));
     }
 
-    // Group rows by track_venue.
+    // Group rows by (track_venue, track_course) — venue alone is ambiguous when a
+    // circuit has multiple layouts (e.g. Silverstone GP vs National).
     let mut tracks: Vec<TrackOption> = Vec::new();
     for row in rows {
-        let track = match tracks.iter_mut().find(|t| t.track_venue == row.track_venue) {
+        let track = match tracks
+            .iter_mut()
+            .find(|t| t.track_venue == row.track_venue && t.track_course == row.track_course)
+        {
             Some(t) => t,
             None => {
                 tracks.push(TrackOption {
@@ -206,7 +212,7 @@ pub fn get_options(conn: &Connection) -> Result<FuelCalcOptions> {
             }
         };
 
-        let fm_key = (row.track_venue.clone(), row.car_name.clone());
+        let fm_key = (row.track_venue.clone(), row.track_course.clone(), row.car_name.clone());
         let (fuel_mult_options, default_fuel_mult) = fm_map
             .get(&fm_key)
             .map(|(opts, def)| (opts.clone(), *def))
@@ -235,6 +241,8 @@ pub fn get_options(conn: &Connection) -> Result<FuelCalcOptions> {
 
 pub struct ComputeParams {
     pub track_venue: String,
+    /// Track layout/variant filter. `None` matches rows with a NULL `track_course`.
+    pub track_course: Option<String>,
     /// Matches `drivers.car_type`.
     pub car_name: String,
     pub race_laps: Option<u32>,
@@ -276,13 +284,21 @@ pub fn compute(conn: &Connection, params: ComputeParams) -> Result<FuelCalcResul
 
     // Determine FuelMult filter: use explicit override or auto-detect from most recent session.
     let filter_fuel_mult: Option<f64> = params.fuel_mult.or_else(|| {
-        query_fuel_mult(conn, &params.track_venue, &params.car_name, filter_version, params.include_practice)
+        query_fuel_mult(
+            conn,
+            &params.track_venue,
+            params.track_course.as_deref(),
+            &params.car_name,
+            filter_version,
+            params.include_practice,
+        )
     });
 
     // Fetch valid laps.
     let laps = query_valid_laps(
         conn,
         &params.track_venue,
+        params.track_course.as_deref(),
         &params.car_name,
         filter_version,
         filter_fuel_mult,
@@ -394,10 +410,16 @@ pub fn compute(conn: &Connection, params: ComputeParams) -> Result<FuelCalcResul
         .map(|ve_pct| (laps_with_buffer * ve_pct).min(100.0));
 
     // Car class from any matching driver row.
-    let car_class = query_car_class(conn, &params.track_venue, &params.car_name)?;
+    let car_class = query_car_class(
+        conn,
+        &params.track_venue,
+        params.track_course.as_deref(),
+        &params.car_name,
+    )?;
 
     Ok(FuelCalcResult {
         track_venue: params.track_venue,
+        track_course: params.track_course,
         car_class,
         car_name: params.car_name,
         sessions_used,
@@ -451,8 +473,8 @@ fn compute_stint_and_stops(consumption_pct_per_lap: f64, race_laps: u32) -> (Opt
 }
 
 fn valid_laps_base_sql(with_version_filter: bool, with_fuel_mult_filter: bool, include_practice: bool) -> String {
-    // ?1 = track_venue, ?2 = car_name, then optional ?3 / ?4 per active filter.
-    let mut next_param = 2i32;
+    // ?1 = track_venue, ?2 = track_course, ?3 = car_name, then optional ?4 / ?5 per active filter.
+    let mut next_param = 3i32;
 
     let version_clause = if with_version_filter {
         next_param += 1;
@@ -479,7 +501,8 @@ fn valid_laps_base_sql(with_version_filter: bool, with_fuel_mult_filter: bool, i
                       ON prev_l.driver_id = l.driver_id
                      AND prev_l.lap_num   = l.lap_num - 1
          WHERE s.track_venue    = ?1
-           AND d.car_type       = ?2
+           AND s.track_course   IS ?2
+           AND d.car_type       = ?3
            AND {sess}
            AND l.lap_num   > 1
            AND l.is_pit    = 0
@@ -494,6 +517,7 @@ fn valid_laps_base_sql(with_version_filter: bool, with_fuel_mult_filter: bool, i
 fn query_valid_laps(
     conn: &Connection,
     track_venue: &str,
+    track_course: Option<&str>,
     car_name: &str,
     version: Option<&str>,
     fuel_mult: Option<f64>,
@@ -513,16 +537,16 @@ fn query_valid_laps(
 
     let rows = match (version, fuel_mult) {
         (Some(v), Some(fm)) => stmt
-            .query_map(rusqlite::params![track_venue, car_name, v, fm], map_row)?
+            .query_map(rusqlite::params![track_venue, track_course, car_name, v, fm], map_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?,
         (Some(v), None) => stmt
-            .query_map(rusqlite::params![track_venue, car_name, v], map_row)?
+            .query_map(rusqlite::params![track_venue, track_course, car_name, v], map_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?,
         (None, Some(fm)) => stmt
-            .query_map(rusqlite::params![track_venue, car_name, fm], map_row)?
+            .query_map(rusqlite::params![track_venue, track_course, car_name, fm], map_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?,
         (None, None) => stmt
-            .query_map(rusqlite::params![track_venue, car_name], map_row)?
+            .query_map(rusqlite::params![track_venue, track_course, car_name], map_row)?
             .collect::<rusqlite::Result<Vec<_>>>()?,
     };
 
@@ -532,12 +556,13 @@ fn query_valid_laps(
 fn query_fuel_mult(
     conn: &Connection,
     track_venue: &str,
+    track_course: Option<&str>,
     car_name: &str,
     version: Option<&str>,
     include_practice: bool,
 ) -> Option<f64> {
     let version_clause = if version.is_some() {
-        "AND s.game_version = ?3"
+        "AND s.game_version = ?4"
     } else {
         ""
     };
@@ -547,7 +572,8 @@ fn query_fuel_mult(
          FROM sessions s
          JOIN drivers d ON d.session_id = s.id AND d.is_player = 1
          WHERE s.track_venue    = ?1
-           AND d.car_type       = ?2
+           AND s.track_course   IS ?2
+           AND d.car_type       = ?3
            AND {sess}
            AND s.fuel_mult IS NOT NULL
            {version_clause}
@@ -556,13 +582,13 @@ fn query_fuel_mult(
     );
 
     if let Some(v) = version {
-        conn.query_row(&sql, rusqlite::params![track_venue, car_name, v], |row| {
+        conn.query_row(&sql, rusqlite::params![track_venue, track_course, car_name, v], |row| {
             row.get(0)
         })
         .ok()
         .flatten()
     } else {
-        conn.query_row(&sql, rusqlite::params![track_venue, car_name], |row| {
+        conn.query_row(&sql, rusqlite::params![track_venue, track_course, car_name], |row| {
             row.get(0)
         })
         .ok()
@@ -573,6 +599,7 @@ fn query_fuel_mult(
 fn query_car_class(
     conn: &Connection,
     track_venue: &str,
+    track_course: Option<&str>,
     car_name: &str,
 ) -> Result<Option<String>> {
     let result: Option<String> = conn
@@ -580,9 +607,9 @@ fn query_car_class(
             "SELECT d.car_class
              FROM sessions s
              JOIN drivers d ON d.session_id = s.id AND d.is_player = 1
-             WHERE s.track_venue = ?1 AND d.car_type = ?2
+             WHERE s.track_venue = ?1 AND s.track_course IS ?2 AND d.car_type = ?3
              LIMIT 1",
-            rusqlite::params![track_venue, car_name],
+            rusqlite::params![track_venue, track_course, car_name],
             |row| row.get(0),
         )
         .ok()

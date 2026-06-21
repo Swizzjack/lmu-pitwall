@@ -608,6 +608,10 @@ pub enum ClientCommand {
     /// Compute fuel/VE requirements for a given track, car, and race distance.
     FuelCalcCompute {
         track_venue: String,
+        /// Track layout/variant filter (e.g. "National Circuit"). `None` matches
+        /// rows whose `track_course` is NULL. Disambiguates venues with multiple layouts.
+        #[serde(default)]
+        track_course: Option<String>,
         /// Matches `drivers.car_type` in the DB (e.g. "Porsche 963 LMDh").
         car_name: String,
         /// Race distance in laps. Provide this OR `race_minutes`, not both.

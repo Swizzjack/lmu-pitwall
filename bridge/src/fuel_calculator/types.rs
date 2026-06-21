@@ -39,6 +39,9 @@ pub struct CarOption {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FuelCalcResult {
     pub track_venue: String,
+    /// Track layout/variant (e.g. "Grand Prix Circuit"). Disambiguates venues
+    /// that share a `track_venue` but differ in layout (e.g. Silverstone GP vs National).
+    pub track_course: Option<String>,
     pub car_class: Option<String>,
     /// `drivers.car_type` value used for this calculation.
     pub car_name: String,
