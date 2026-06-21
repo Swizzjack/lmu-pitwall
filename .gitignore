@@ -34,6 +34,8 @@ config.json
 
 # Claude
 .claude/
+.cache/
+.ssh/
 
 # Local agent instructions (not public)
 AGENTS.md

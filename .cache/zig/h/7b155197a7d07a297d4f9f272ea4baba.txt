@@ -1,2 +1,0 @@
-0
-2462 2666532 1777725347000000000 0f042c6340b615f2c311da4f252b1fea 1 libc/mingw/lib-common/api-ms-win-crt-stdio-l1-1-0.def
