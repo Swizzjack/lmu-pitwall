@@ -36,6 +36,7 @@ config.json
 .claude/
 .cache/
 .ssh/
+.cargo/
 
 # Local agent instructions (not public)
 AGENTS.md
