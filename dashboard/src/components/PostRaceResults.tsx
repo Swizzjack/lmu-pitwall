@@ -6,6 +6,7 @@ import {
 } from 'recharts'
 import { colors, fonts } from '../styles/theme'
 import { useSettingsStore } from '../stores/settingsStore'
+import type { PostRaceSortCol } from '../stores/settingsStore'
 import { bridgeWsUrl } from '../utils/bridge'
 import { getClassColor } from '../utils/classColors'
 
@@ -2202,6 +2203,42 @@ function SessionBrowser({
   onSelect: (s: PostRaceSessionMeta) => void
   importInfo: { total: number; newImported: number; filesFound: number; importErrors: number } | null
 }) {
+  const sortCol = useSettingsStore(s => s.postRaceSortCol)
+  const sortDir = useSettingsStore(s => s.postRaceSortDir)
+  const update = useSettingsStore(s => s.update)
+
+  // Text columns default to ascending on first click, numeric/date to descending.
+  const TEXT_COLS: PostRaceSortCol[] = ['track', 'event', 'type', 'version']
+
+  function onHeaderSort(col: PostRaceSortCol) {
+    if (col === sortCol) {
+      update({ postRaceSortDir: sortDir === 'asc' ? 'desc' : 'asc' })
+    } else {
+      update({ postRaceSortCol: col, postRaceSortDir: TEXT_COLS.includes(col) ? 'asc' : 'desc' })
+    }
+  }
+
+  const sortedSessions = useMemo(() => {
+    const dir = sortDir === 'asc' ? 1 : -1
+    return [...sessions].sort((a, b) => {
+      let av: number | string, bv: number | string
+      switch (sortCol) {
+        case 'track':   av = a.track_venue ?? ''; bv = b.track_venue ?? ''; break
+        case 'event':   av = a.track_event ?? ''; bv = b.track_event ?? ''; break
+        case 'type':    av = normalizeSessionType(a.session_type); bv = normalizeSessionType(b.session_type); break
+        case 'version': av = a.game_version ?? ''; bv = b.game_version ?? ''; break
+        case 'drivers': av = a.driver_count; bv = b.driver_count; break
+        case 'laps':    av = a.race_laps ?? a.total_laps; bv = b.race_laps ?? b.total_laps; break
+        case 'date':
+        default:        av = parseDateTime(a.date_time)?.getTime() ?? 0; bv = parseDateTime(b.date_time)?.getTime() ?? 0
+      }
+      const cmp = typeof av === 'string' && typeof bv === 'string'
+        ? av.localeCompare(bv)
+        : (av as number) - (bv as number)
+      return cmp * dir
+    })
+  }, [sessions, sortCol, sortDir])
+
   const thStyle: React.CSSProperties = {
     padding: '5px 10px',
     borderBottom: `2px solid ${colors.border}`,
@@ -2217,6 +2254,20 @@ function SessionBrowser({
     whiteSpace: 'nowrap',
     textAlign: 'left',
     userSelect: 'none',
+  }
+
+  const sortTh = (col: PostRaceSortCol, label: string, align: 'left' | 'center' | 'right' = 'left') => {
+    const active = sortCol === col
+    return (
+      <th
+        key={col}
+        onClick={() => onHeaderSort(col)}
+        title="Click to sort"
+        style={{ ...thStyle, textAlign: align, cursor: 'pointer', color: active ? colors.accent : colors.primary }}
+      >
+        {label}{active ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
+      </th>
+    )
   }
 
   if (sessions.length === 0) {
@@ -2267,17 +2318,17 @@ function SessionBrowser({
       <table style={{ width: '100%', borderCollapse: 'collapse', tableLayout: 'auto' }}>
         <thead>
           <tr>
-            <th style={{ ...thStyle }}>DATE</th>
-            <th style={{ ...thStyle }}>TRACK</th>
-            <th style={{ ...thStyle }}>EVENT</th>
-            <th style={{ ...thStyle, textAlign: 'center' }}>TYPE</th>
-            <th style={{ ...thStyle }}>VERSION</th>
-            <th style={{ ...thStyle, textAlign: 'right' }}>DRIVERS</th>
-            <th style={{ ...thStyle, textAlign: 'right' }}>LAPS</th>
+            {sortTh('date', 'DATE')}
+            {sortTh('track', 'TRACK')}
+            {sortTh('event', 'EVENT')}
+            {sortTh('type', 'TYPE', 'center')}
+            {sortTh('version', 'VERSION')}
+            {sortTh('drivers', 'DRIVERS', 'right')}
+            {sortTh('laps', 'LAPS', 'right')}
           </tr>
         </thead>
         <tbody>
-          {sessions.map((s, idx) => {
+          {sortedSessions.map((s, idx) => {
             const sessionType = normalizeSessionType(s.session_type)
             const rowBg = idx % 2 === 0 ? colors.bg : '#141414'
             return (

@@ -10,6 +10,10 @@ export type InputChartFps = 60 | 30 | 15
 export type ClockFormat = '12h' | '24h'
 export type DamageDetail = 'compact' | 'medium' | 'full'
 export type WeatherDetail = 'compact' | 'medium' | 'full'
+export type PostRaceSortCol = 'date' | 'track' | 'event' | 'type' | 'version' | 'drivers' | 'laps'
+export type SortDir = 'asc' | 'desc'
+
+const POST_RACE_SORT_COLS: PostRaceSortCol[] = ['date', 'track', 'event', 'type', 'version', 'drivers', 'laps']
 
 export interface SettingsState {
   speedUnit: SpeedUnit
@@ -41,6 +45,8 @@ export interface SettingsState {
   weatherDetail: WeatherDetail
   // Post Race Results
   resultsPath: string
+  postRaceSortCol: PostRaceSortCol
+  postRaceSortDir: SortDir
 }
 
 interface SettingsStore extends SettingsState {
@@ -89,6 +95,8 @@ export const SETTINGS_DEFAULTS: SettingsState = {
   weatherDetail: 'full',
   // Post Race Results
   resultsPath: '',
+  postRaceSortCol: 'date',
+  postRaceSortDir: 'desc',
 }
 
 export const useSettingsStore = create<SettingsStore>()(
@@ -103,10 +111,12 @@ export const useSettingsStore = create<SettingsStore>()(
       exportSettings: () => {
         const { speedUnit, tempUnit, pressureUnit, fuelUnit, lapReserve, wsHost, wsPort, primaryColor, accentColor, fpsLimit, inputChartFps,
           timeWidgetShowComputerTime, timeWidgetClockFormat, timeWidgetShowSessionElapsed, timeWidgetShowTimeRemaining, timeWidgetShowCurrentLap,
-          standingsShowCompound, standingsShowCarType, standingsShowVE, standingsShowDamage, damageDetail, weatherDetail, resultsPath } = get()
+          standingsShowCompound, standingsShowCarType, standingsShowVE, standingsShowDamage, damageDetail, weatherDetail, resultsPath,
+          postRaceSortCol, postRaceSortDir } = get()
         return JSON.stringify({ speedUnit, tempUnit, pressureUnit, fuelUnit, lapReserve, wsHost, wsPort, primaryColor, accentColor, fpsLimit, inputChartFps,
           timeWidgetShowComputerTime, timeWidgetClockFormat, timeWidgetShowSessionElapsed, timeWidgetShowTimeRemaining, timeWidgetShowCurrentLap,
-          standingsShowCompound, standingsShowCarType, standingsShowVE, standingsShowDamage, damageDetail, weatherDetail, resultsPath }, null, 2)
+          standingsShowCompound, standingsShowCarType, standingsShowVE, standingsShowDamage, damageDetail, weatherDetail, resultsPath,
+          postRaceSortCol, postRaceSortDir }, null, 2)
       },
 
       importSettings: (json) => {
@@ -136,6 +146,8 @@ export const useSettingsStore = create<SettingsStore>()(
           if (data.damageDetail === 'compact' || data.damageDetail === 'medium' || data.damageDetail === 'full') valid.damageDetail = data.damageDetail
           if (data.weatherDetail === 'compact' || data.weatherDetail === 'medium' || data.weatherDetail === 'full') valid.weatherDetail = data.weatherDetail
           if (typeof data.resultsPath === 'string') valid.resultsPath = data.resultsPath
+          if (data.postRaceSortCol && POST_RACE_SORT_COLS.includes(data.postRaceSortCol)) valid.postRaceSortCol = data.postRaceSortCol
+          if (data.postRaceSortDir === 'asc' || data.postRaceSortDir === 'desc') valid.postRaceSortDir = data.postRaceSortDir
           set(valid)
           return true
         } catch {
