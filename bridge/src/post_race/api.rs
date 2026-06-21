@@ -94,7 +94,7 @@ fn query_sessions(conn: &Connection) -> Result<Vec<PostRaceSessionMeta>> {
          LEFT JOIN drivers d ON d.session_id = s.id
          LEFT JOIN laps    l ON l.session_id = s.id
          GROUP BY s.id
-         ORDER BY s.imported_at DESC",
+         ORDER BY s.date_time DESC",
     )?;
 
     let rows = stmt.query_map([], |row| {
