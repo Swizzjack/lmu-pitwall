@@ -29,6 +29,7 @@ interface FuelCalcOptionsPayload {
 
 interface FuelCalcResult {
   track_venue: string
+  track_course: string | null
   car_class: string | null
   car_name: string
   sessions_used: number
@@ -89,6 +90,17 @@ function fmtLapTime(secs: number): string {
   const m = Math.floor(secs / 60)
   const s = secs - m * 60
   return `${m}:${s.toFixed(1).padStart(4, '0')}`
+}
+
+function fmtLength(m: number | null): string {
+  if (m === null || m === undefined) return ''
+  return m >= 1000 ? `${(m / 1000).toFixed(3)} km` : `${Math.round(m)} m`
+}
+
+// Stable key for a track variant. track_course is normally populated; '' is the
+// sentinel for "no variant selected" and also covers a NULL course defensively.
+function courseKey(t: { track_course: string | null }): string {
+  return t.track_course ?? ''
 }
 
 // ── Shared small components ───────────────────────────────────────────────────
@@ -213,8 +225,9 @@ export default function FuelCalculator({ onClose }: { onClose: () => void }) {
   const [gameVersions, setGameVersions] = useState<string[]>([])
   const [currentVersion, setCurrentVersion] = useState<string | null>(null)
 
-  // Selection
-  const [selectedTrack, setSelectedTrack] = useState('')
+  // Selection — venue + course together identify a track variant (e.g. Silverstone GP vs National)
+  const [selectedVenue, setSelectedVenue] = useState('')
+  const [selectedCourse, setSelectedCourse] = useState('')  // '' = no variant chosen
   const [selectedCar, setSelectedCar] = useState('')
   const [distanceMode, setDistanceMode] = useState<'laps' | 'time'>('time')
   const [distanceValue, setDistanceValue] = useState('')
@@ -235,15 +248,25 @@ export default function FuelCalculator({ onClose }: { onClose: () => void }) {
   const [calcLoading, setCalcLoading] = useState(false)
   const [calcError, setCalcError] = useState<string | null>(null)
 
-  // Derived: cars available for selected track
-  const availableCars = selectedTrack
-    ? (tracks.find(t => t.track_venue === selectedTrack)?.cars ?? [])
+  // Derived: distinct venues (preserve backend order), variants for the selected venue,
+  // and the resolved track variant.
+  const venues = [...new Set(tracks.map(t => t.track_venue))]
+
+  const variantsForVenue = selectedVenue
+    ? tracks.filter(t => t.track_venue === selectedVenue)
     : []
+
+  const selectedTrackOption = selectedVenue
+    ? variantsForVenue.find(t => courseKey(t) === selectedCourse) ?? null
+    : null
+
+  // Cars available for the selected track variant
+  const availableCars = selectedTrackOption?.cars ?? []
 
   const selectedCarOption = availableCars.find(c => c.car_name === selectedCar) ?? null
 
   const canCalculate =
-    selectedTrack !== '' &&
+    selectedTrackOption !== null &&
     selectedCar !== '' &&
     distanceValue !== '' &&
     !isNaN(parseFloat(distanceValue)) &&
@@ -332,8 +355,19 @@ export default function FuelCalculator({ onClose }: { onClose: () => void }) {
 
   // ── Actions ─────────────────────────────────────────────────────────────────
 
-  function handleTrackChange(venue: string) {
-    setSelectedTrack(venue)
+  function handleVenueChange(venue: string) {
+    setSelectedVenue(venue)
+    // Auto-select the variant when the venue has exactly one layout.
+    const variants = venue ? tracks.filter(t => t.track_venue === venue) : []
+    setSelectedCourse(variants.length === 1 ? courseKey(variants[0]) : '')
+    setSelectedCar('')
+    setFuelMultOverride('')
+    setResult(null)
+    setCalcError(null)
+  }
+
+  function handleCourseChange(course: string) {
+    setSelectedCourse(course)
     setSelectedCar('')
     setFuelMultOverride('')
     setResult(null)
@@ -356,7 +390,8 @@ export default function FuelCalculator({ onClose }: { onClose: () => void }) {
 
     const cmd: Record<string, unknown> = {
       command: 'fuel_calc_compute',
-      track_venue: selectedTrack,
+      track_venue: selectedVenue,
+      track_course: selectedTrackOption?.track_course ?? null,
       car_name: selectedCar,
       include_all_versions: includeAllVersions,
       include_practice: includePractice,
@@ -633,23 +668,41 @@ export default function FuelCalculator({ onClose }: { onClose: () => void }) {
             flexDirection: 'column',
             gap: 16,
           }}>
-            {/* Track */}
+            {/* Track (venue) */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
               <Label>Track</Label>
               <select
-                value={selectedTrack}
-                onChange={e => handleTrackChange(e.target.value)}
+                value={selectedVenue}
+                onChange={e => handleVenueChange(e.target.value)}
                 style={selectStyle}
               >
                 <option value="">— Select track —</option>
-                {tracks.map(t => (
-                  <option key={t.track_venue} value={t.track_venue}>
-                    {t.track_venue}
-                    {t.track_course ? ` · ${t.track_course}` : ''}
-                  </option>
+                {venues.map(v => (
+                  <option key={v} value={v}>{v}</option>
                 ))}
               </select>
             </div>
+
+            {/* Variant (layout) — shown once a venue is selected */}
+            {selectedVenue && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
+                <Label>Variant</Label>
+                <select
+                  value={selectedCourse}
+                  onChange={e => handleCourseChange(e.target.value)}
+                  style={{ ...selectStyle, opacity: variantsForVenue.length <= 1 ? 0.6 : 1 }}
+                  disabled={variantsForVenue.length <= 1}
+                >
+                  {variantsForVenue.length > 1 && <option value="">— Select variant —</option>}
+                  {variantsForVenue.map(t => (
+                    <option key={courseKey(t)} value={courseKey(t)}>
+                      {t.track_course ?? '(default)'}
+                      {t.track_length ? ` · ${fmtLength(t.track_length)}` : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
 
             {/* Car */}
             <div style={{ display: 'flex', flexDirection: 'column', gap: 5 }}>
@@ -657,8 +710,8 @@ export default function FuelCalculator({ onClose }: { onClose: () => void }) {
               <select
                 value={selectedCar}
                 onChange={e => handleCarChange(e.target.value)}
-                style={{ ...selectStyle, opacity: !selectedTrack ? 0.5 : 1 }}
-                disabled={!selectedTrack}
+                style={{ ...selectStyle, opacity: !selectedTrackOption ? 0.5 : 1 }}
+                disabled={!selectedTrackOption}
               >
                 <option value="">— Select car —</option>
                 {availableCars.map(c => (
@@ -998,6 +1051,10 @@ export default function FuelCalculator({ onClose }: { onClose: () => void }) {
                 <Card>
                   <CardTitle>Data Quality</CardTitle>
                   <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+                    <StatRow
+                      label="Track"
+                      value={`${result.track_venue}${result.track_course ? ` · ${result.track_course}` : ''}`}
+                    />
                     <StatRow
                       label="Laps used"
                       value={`${result.laps_used} laps from ${result.sessions_used} session${result.sessions_used !== 1 ? 's' : ''}`}

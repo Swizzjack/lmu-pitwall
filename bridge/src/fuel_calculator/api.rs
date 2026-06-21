@@ -13,6 +13,7 @@ pub fn handle_command(cmd: ClientCommand) -> ServerMessage {
         ClientCommand::FuelCalcInit => fuel_calc_init(),
         ClientCommand::FuelCalcCompute {
             track_venue,
+            track_course,
             car_name,
             race_laps,
             race_minutes,
@@ -22,6 +23,7 @@ pub fn handle_command(cmd: ClientCommand) -> ServerMessage {
             buffer_laps,
         } => fuel_calc_compute(ComputeParams {
             track_venue,
+            track_course,
             car_name,
             race_laps,
             race_minutes,
