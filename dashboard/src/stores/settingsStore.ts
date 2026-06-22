@@ -12,6 +12,7 @@ export type DamageDetail = 'compact' | 'medium' | 'full'
 export type WeatherDetail = 'compact' | 'medium' | 'full'
 export type PostRaceSortCol = 'date' | 'track' | 'event' | 'type' | 'version' | 'drivers' | 'laps'
 export type SortDir = 'asc' | 'desc'
+export type BattleMode = 'battle' | 'relative'
 
 const POST_RACE_SORT_COLS: PostRaceSortCol[] = ['date', 'track', 'event', 'type', 'version', 'drivers', 'laps']
 
@@ -39,6 +40,13 @@ export interface SettingsState {
   standingsShowCarType: boolean
   standingsShowVE: boolean
   standingsShowDamage: boolean
+  // Battle Widget
+  battleMode: BattleMode        // 'battle' = standings position ±N, 'relative' = nearest on track
+  battleCount: number           // drivers shown above/below the player (1–3)
+  battleShowPosName: boolean
+  battleShowSectors: boolean
+  battleShowLaps: boolean       // best & last lap columns
+  battleShowGap: boolean
   // Damage Widget
   damageDetail: DamageDetail
   // Weather Widget
@@ -89,6 +97,13 @@ export const SETTINGS_DEFAULTS: SettingsState = {
   standingsShowCarType: true,
   standingsShowVE: true,
   standingsShowDamage: true,
+  // Battle Widget
+  battleMode: 'battle',
+  battleCount: 2,
+  battleShowPosName: true,
+  battleShowSectors: true,
+  battleShowLaps: true,
+  battleShowGap: true,
   // Damage Widget
   damageDetail: 'full',
   // Weather Widget
@@ -111,11 +126,13 @@ export const useSettingsStore = create<SettingsStore>()(
       exportSettings: () => {
         const { speedUnit, tempUnit, pressureUnit, fuelUnit, lapReserve, wsHost, wsPort, primaryColor, accentColor, fpsLimit, inputChartFps,
           timeWidgetShowComputerTime, timeWidgetClockFormat, timeWidgetShowSessionElapsed, timeWidgetShowTimeRemaining, timeWidgetShowCurrentLap,
-          standingsShowCompound, standingsShowCarType, standingsShowVE, standingsShowDamage, damageDetail, weatherDetail, resultsPath,
+          standingsShowCompound, standingsShowCarType, standingsShowVE, standingsShowDamage,
+          battleMode, battleCount, battleShowPosName, battleShowSectors, battleShowLaps, battleShowGap, damageDetail, weatherDetail, resultsPath,
           postRaceSortCol, postRaceSortDir } = get()
         return JSON.stringify({ speedUnit, tempUnit, pressureUnit, fuelUnit, lapReserve, wsHost, wsPort, primaryColor, accentColor, fpsLimit, inputChartFps,
           timeWidgetShowComputerTime, timeWidgetClockFormat, timeWidgetShowSessionElapsed, timeWidgetShowTimeRemaining, timeWidgetShowCurrentLap,
-          standingsShowCompound, standingsShowCarType, standingsShowVE, standingsShowDamage, damageDetail, weatherDetail, resultsPath,
+          standingsShowCompound, standingsShowCarType, standingsShowVE, standingsShowDamage,
+          battleMode, battleCount, battleShowPosName, battleShowSectors, battleShowLaps, battleShowGap, damageDetail, weatherDetail, resultsPath,
           postRaceSortCol, postRaceSortDir }, null, 2)
       },
 
@@ -143,6 +160,12 @@ export const useSettingsStore = create<SettingsStore>()(
           if (typeof data.standingsShowCarType === 'boolean') valid.standingsShowCarType = data.standingsShowCarType
           if (typeof data.standingsShowVE === 'boolean') valid.standingsShowVE = data.standingsShowVE
           if (typeof data.standingsShowDamage === 'boolean') valid.standingsShowDamage = data.standingsShowDamage
+          if (data.battleMode === 'battle' || data.battleMode === 'relative') valid.battleMode = data.battleMode
+          if (typeof data.battleCount === 'number' && data.battleCount >= 1 && data.battleCount <= 3) valid.battleCount = Math.round(data.battleCount)
+          if (typeof data.battleShowPosName === 'boolean') valid.battleShowPosName = data.battleShowPosName
+          if (typeof data.battleShowSectors === 'boolean') valid.battleShowSectors = data.battleShowSectors
+          if (typeof data.battleShowLaps === 'boolean') valid.battleShowLaps = data.battleShowLaps
+          if (typeof data.battleShowGap === 'boolean') valid.battleShowGap = data.battleShowGap
           if (data.damageDetail === 'compact' || data.damageDetail === 'medium' || data.damageDetail === 'full') valid.damageDetail = data.damageDetail
           if (data.weatherDetail === 'compact' || data.weatherDetail === 'medium' || data.weatherDetail === 'full') valid.weatherDetail = data.weatherDetail
           if (typeof data.resultsPath === 'string') valid.resultsPath = data.resultsPath
