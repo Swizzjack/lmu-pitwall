@@ -4,12 +4,8 @@ import { useSettingsStore } from '../../stores/settingsStore'
 import { colors, fonts } from '../../styles/theme'
 import { getClassColor } from '../../utils/classColors'
 import { DAMAGE_ZONES, dentPct } from '../../utils/damage'
+import { hexAlpha, fmtSec, fmtLap, fmtTimeDiff, sectorColor, bestS2, SECTOR_SB } from '../../utils/lapFormat'
 import type { VehicleScoring } from '../../types/telemetry'
-
-function hexAlpha(hex: string, alpha: number): string {
-  const a = Math.round(alpha * 255).toString(16).padStart(2, '0')
-  return `${hex}${a}`
-}
 
 function ClassBadge({ position, vehicleClass }: { position: string; vehicleClass: string }) {
   const base = getClassColor(vehicleClass)
@@ -26,28 +22,6 @@ function ClassBadge({ position, vehicleClass }: { position: string; vehicleClass
       {position}
     </span>
   )
-}
-
-const SECTOR_PB = '#22c55e'   // green — personal best in this sector
-const SECTOR_SB = '#a855f7'   // purple — session best in this sector
-
-function fmtSec(s: number): string {
-  return s < 0 ? '---' : s.toFixed(3)
-}
-
-function fmtLap(s: number): string {
-  if (s <= 0) return '--:--.---'
-  const m = Math.floor(s / 60)
-  const rem = s - m * 60
-  return `${m}:${rem.toFixed(3).padStart(6, '0')}`
-}
-
-function fmtTimeDiff(diff: number): string {
-  if (diff >= 60) {
-    const m = Math.floor(diff / 60)
-    return `+${m}:${(diff - m * 60).toFixed(3).padStart(6, '0')}`
-  }
-  return `+${diff.toFixed(3)}`
 }
 
 function fmtGap(v: VehicleScoring, leader: VehicleScoring, isRace: boolean): string {
@@ -72,10 +46,6 @@ function compoundColor(name: string): string {
   if (n.includes('wet') || n.includes('rain') || n.includes('inter')) return '#3b82f6' // blue
   if (n.includes('slick'))                        return '#f97316'   // orange — LMU slick
   return '#a3a3a3'  // neutral gray for unknown
-}
-
-function bestS2(v: VehicleScoring): number {
-  return v.best_sector1 > 0 && v.best_sector2 > 0 ? v.best_sector2 - v.best_sector1 : -1
 }
 
 function MiniDamageGrid({ dentSeverity, width }: { dentSeverity: number[]; width: number }) {
@@ -104,13 +74,6 @@ function MiniDamageGrid({ dentSeverity, width }: { dentSeverity: number[]; width
       </span>
     </div>
   )
-}
-
-function sectorColor(val: number, sessionBest: number, personalBest: number): string {
-  if (val < 0) return colors.text
-  if (isFinite(sessionBest) && Math.abs(val - sessionBest) < 0.001) return SECTOR_SB
-  if (personalBest > 0 && Math.abs(val - personalBest) < 0.001) return SECTOR_PB
-  return colors.text
 }
 
 export default function Standings() {

@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect } from 'react'
 import { useSettingsStore, SETTINGS_DEFAULTS } from '../stores/settingsStore'
-import type { FpsLimit, InputChartFps, SpeedUnit, TempUnit, PressureUnit, FuelUnit, ClockFormat, DamageDetail, WeatherDetail } from '../stores/settingsStore'
+import type { FpsLimit, InputChartFps, SpeedUnit, TempUnit, PressureUnit, FuelUnit, ClockFormat, DamageDetail, WeatherDetail, BattleMode, BattleValueMode } from '../stores/settingsStore'
 import { colors, fonts } from '../styles/theme'
 import { bridgeHttpBase } from '../utils/bridge'
 
@@ -431,6 +431,65 @@ export default function Settings({ open, onClose }: Props) {
                 value={s.standingsShowDamage ? 'on' : 'off'}
                 options={[{ value: 'on', label: 'On' }, { value: 'off', label: 'Off' }]}
                 onChange={(v) => s.update({ standingsShowDamage: v === 'on' })}
+              />
+            </Row>
+          </Section>
+
+          {/* Proximity Widget (Battle / Relative) */}
+          <Section title="Proximity Widget">
+            <Row label="Mode">
+              <SegmentControl
+                value={s.battleMode}
+                options={[
+                  { value: 'battle', label: 'Battle' },
+                  { value: 'relative', label: 'Relative' },
+                ] as { value: BattleMode; label: string }[]}
+                onChange={(v) => s.update({ battleMode: v as BattleMode })}
+              />
+            </Row>
+            <Row label="Times">
+              <SegmentControl
+                value={s.battleValueMode}
+                options={[
+                  { value: 'absolute', label: 'Absolute' },
+                  { value: 'delta', label: 'Δ Player' },
+                ] as { value: BattleValueMode; label: string }[]}
+                onChange={(v) => s.update({ battleValueMode: v as BattleValueMode })}
+              />
+            </Row>
+            <Row label="Drivers ± Player">
+              <SegmentControl
+                value={String(s.battleCount)}
+                options={[{ value: '1', label: '1' }, { value: '2', label: '2' }, { value: '3', label: '3' }]}
+                onChange={(v) => s.update({ battleCount: Number(v) })}
+              />
+            </Row>
+            <Row label="Position & No.">
+              <SegmentControl
+                value={s.battleShowPosName ? 'on' : 'off'}
+                options={[{ value: 'on', label: 'On' }, { value: 'off', label: 'Off' }]}
+                onChange={(v) => s.update({ battleShowPosName: v === 'on' })}
+              />
+            </Row>
+            <Row label="Sector Times">
+              <SegmentControl
+                value={s.battleShowSectors ? 'on' : 'off'}
+                options={[{ value: 'on', label: 'On' }, { value: 'off', label: 'Off' }]}
+                onChange={(v) => s.update({ battleShowSectors: v === 'on' })}
+              />
+            </Row>
+            <Row label="Best & Last Lap">
+              <SegmentControl
+                value={s.battleShowLaps ? 'on' : 'off'}
+                options={[{ value: 'on', label: 'On' }, { value: 'off', label: 'Off' }]}
+                onChange={(v) => s.update({ battleShowLaps: v === 'on' })}
+              />
+            </Row>
+            <Row label="Gap">
+              <SegmentControl
+                value={s.battleShowGap ? 'on' : 'off'}
+                options={[{ value: 'on', label: 'On' }, { value: 'off', label: 'Off' }]}
+                onChange={(v) => s.update({ battleShowGap: v === 'on' })}
               />
             </Row>
           </Section>
