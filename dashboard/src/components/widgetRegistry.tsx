@@ -86,7 +86,7 @@ export const WIDGET_REGISTRY: Record<string, WidgetMeta> = {
   },
   BattleWidget: {
     id: 'BattleWidget',
-    name: 'Battle',
+    name: 'Proximity',
     component: BattleWidget,
     defaultSize: { w: 6, h: 3 },
     minSize: { w: 4, h: 2 },

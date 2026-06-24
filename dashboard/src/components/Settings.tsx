@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect } from 'react'
 import { useSettingsStore, SETTINGS_DEFAULTS } from '../stores/settingsStore'
-import type { FpsLimit, InputChartFps, SpeedUnit, TempUnit, PressureUnit, FuelUnit, ClockFormat, DamageDetail, WeatherDetail, BattleMode } from '../stores/settingsStore'
+import type { FpsLimit, InputChartFps, SpeedUnit, TempUnit, PressureUnit, FuelUnit, ClockFormat, DamageDetail, WeatherDetail, BattleMode, BattleValueMode } from '../stores/settingsStore'
 import { colors, fonts } from '../styles/theme'
 import { bridgeHttpBase } from '../utils/bridge'
 
@@ -435,8 +435,8 @@ export default function Settings({ open, onClose }: Props) {
             </Row>
           </Section>
 
-          {/* Battle Widget */}
-          <Section title="Battle Widget">
+          {/* Proximity Widget (Battle / Relative) */}
+          <Section title="Proximity Widget">
             <Row label="Mode">
               <SegmentControl
                 value={s.battleMode}
@@ -445,6 +445,16 @@ export default function Settings({ open, onClose }: Props) {
                   { value: 'relative', label: 'Relative' },
                 ] as { value: BattleMode; label: string }[]}
                 onChange={(v) => s.update({ battleMode: v as BattleMode })}
+              />
+            </Row>
+            <Row label="Times">
+              <SegmentControl
+                value={s.battleValueMode}
+                options={[
+                  { value: 'absolute', label: 'Absolute' },
+                  { value: 'delta', label: 'Δ Player' },
+                ] as { value: BattleValueMode; label: string }[]}
+                onChange={(v) => s.update({ battleValueMode: v as BattleValueMode })}
               />
             </Row>
             <Row label="Drivers ± Player">

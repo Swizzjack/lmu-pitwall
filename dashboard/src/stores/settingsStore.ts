@@ -13,6 +13,7 @@ export type WeatherDetail = 'compact' | 'medium' | 'full'
 export type PostRaceSortCol = 'date' | 'track' | 'event' | 'type' | 'version' | 'drivers' | 'laps'
 export type SortDir = 'asc' | 'desc'
 export type BattleMode = 'battle' | 'relative'
+export type BattleValueMode = 'absolute' | 'delta'  // 'delta' = sectors/laps shown relative to player
 
 const POST_RACE_SORT_COLS: PostRaceSortCol[] = ['date', 'track', 'event', 'type', 'version', 'drivers', 'laps']
 
@@ -42,6 +43,7 @@ export interface SettingsState {
   standingsShowDamage: boolean
   // Battle Widget
   battleMode: BattleMode        // 'battle' = standings position ±N, 'relative' = nearest on track
+  battleValueMode: BattleValueMode  // 'absolute' = fixed times, 'delta' = relative to player (Gap excluded)
   battleCount: number           // drivers shown above/below the player (1–3)
   battleShowPosName: boolean
   battleShowSectors: boolean
@@ -99,6 +101,7 @@ export const SETTINGS_DEFAULTS: SettingsState = {
   standingsShowDamage: true,
   // Battle Widget
   battleMode: 'battle',
+  battleValueMode: 'absolute',
   battleCount: 2,
   battleShowPosName: true,
   battleShowSectors: true,
@@ -127,12 +130,12 @@ export const useSettingsStore = create<SettingsStore>()(
         const { speedUnit, tempUnit, pressureUnit, fuelUnit, lapReserve, wsHost, wsPort, primaryColor, accentColor, fpsLimit, inputChartFps,
           timeWidgetShowComputerTime, timeWidgetClockFormat, timeWidgetShowSessionElapsed, timeWidgetShowTimeRemaining, timeWidgetShowCurrentLap,
           standingsShowCompound, standingsShowCarType, standingsShowVE, standingsShowDamage,
-          battleMode, battleCount, battleShowPosName, battleShowSectors, battleShowLaps, battleShowGap, damageDetail, weatherDetail, resultsPath,
+          battleMode, battleValueMode, battleCount, battleShowPosName, battleShowSectors, battleShowLaps, battleShowGap, damageDetail, weatherDetail, resultsPath,
           postRaceSortCol, postRaceSortDir } = get()
         return JSON.stringify({ speedUnit, tempUnit, pressureUnit, fuelUnit, lapReserve, wsHost, wsPort, primaryColor, accentColor, fpsLimit, inputChartFps,
           timeWidgetShowComputerTime, timeWidgetClockFormat, timeWidgetShowSessionElapsed, timeWidgetShowTimeRemaining, timeWidgetShowCurrentLap,
           standingsShowCompound, standingsShowCarType, standingsShowVE, standingsShowDamage,
-          battleMode, battleCount, battleShowPosName, battleShowSectors, battleShowLaps, battleShowGap, damageDetail, weatherDetail, resultsPath,
+          battleMode, battleValueMode, battleCount, battleShowPosName, battleShowSectors, battleShowLaps, battleShowGap, damageDetail, weatherDetail, resultsPath,
           postRaceSortCol, postRaceSortDir }, null, 2)
       },
 
@@ -161,6 +164,7 @@ export const useSettingsStore = create<SettingsStore>()(
           if (typeof data.standingsShowVE === 'boolean') valid.standingsShowVE = data.standingsShowVE
           if (typeof data.standingsShowDamage === 'boolean') valid.standingsShowDamage = data.standingsShowDamage
           if (data.battleMode === 'battle' || data.battleMode === 'relative') valid.battleMode = data.battleMode
+          if (data.battleValueMode === 'absolute' || data.battleValueMode === 'delta') valid.battleValueMode = data.battleValueMode
           if (typeof data.battleCount === 'number' && data.battleCount >= 1 && data.battleCount <= 3) valid.battleCount = Math.round(data.battleCount)
           if (typeof data.battleShowPosName === 'boolean') valid.battleShowPosName = data.battleShowPosName
           if (typeof data.battleShowSectors === 'boolean') valid.battleShowSectors = data.battleShowSectors
