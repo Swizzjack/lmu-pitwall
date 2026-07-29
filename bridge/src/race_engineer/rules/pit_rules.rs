@@ -103,12 +103,20 @@ impl Rule for PitlaneExitBriefingRule {
             "up to temperature"
         };
 
+        // With a drifted wheel block the tire clause would be a confident lie,
+        // so drop it and brief on weather only.
+        let template_key = if current.tire_data_valid {
+            "pitlane_exit_briefing"
+        } else {
+            "pitlane_exit_briefing_no_tires"
+        };
+
         let temp = current.ambient_temp_c.round() as i32;
 
         Some(RuleEvent {
             rule_id: self.id(),
             priority: self.priority(),
-            template_key: "pitlane_exit_briefing",
+            template_key,
             params: TemplateParams::new()
                 .set("condition", condition.to_string())
                 .set("temp", temp.to_string())

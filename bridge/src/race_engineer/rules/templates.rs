@@ -259,6 +259,14 @@ impl TemplateRegistry {
             "Conditions {condition}, {temp} degrees. Tires {tire_status}.",
             "{driver_name}, out of the pits. Track {condition}, {temp} degrees. Tires {tire_status}.",
         ]);
+        // Used when the wheel block failed its plausibility check — same
+        // briefing without the tire clause.
+        t.insert("pitlane_exit_briefing_no_tires", &[
+            "Track {condition}, {temp} degrees.",
+            "Out of the pits. Track is {condition}, {temp} ambient.",
+            "Conditions {condition}, {temp} degrees.",
+            "{driver_name}, out of the pits. Track {condition}, {temp} degrees.",
+        ]);
         t.insert("rain_forecast_10min", &[
             "Rain forecast in about {minutes} minutes. {chance} percent chance. Think about your strategy.",
             "Heads up, rain expected in roughly {minutes} minutes. {chance} percent.",

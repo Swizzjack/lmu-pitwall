@@ -197,8 +197,15 @@ function TireCell({ label, tire, size, mirror = false }: { label: string; tire: 
 
 export default function TireMonitor() {
   const tires        = useTelemetryStore((s) => s.telemetry.tires)
+  const gameConnected  = useTelemetryStore((s) => s.connection.game_connected)
+  const telemetryValid = useTelemetryStore((s) => s.connection.telemetry_valid)
   const containerRef = useRef<HTMLDivElement>(null)
   const [size, setSize] = useState<CellSize>('normal')
+
+  // Shared-memory layout drift: every value below is decoded from the wrong
+  // offset. Without this the cells still render, fully color-coded — nonsense
+  // shown in confident green. Dim them and say so instead.
+  const unreliable = gameConnected && !telemetryValid
 
   useEffect(() => {
     if (!containerRef.current) return
@@ -227,15 +234,40 @@ export default function TireMonitor() {
       justifyContent: 'center',
       gap,
     }}>
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: cellGap }}>
+      <div style={{
+        display: 'grid',
+        gridTemplateColumns: '1fr 1fr',
+        gap: cellGap,
+        opacity: unreliable ? 0.3 : 1,
+        filter: unreliable ? 'grayscale(1)' : undefined,
+      }}>
         <TireCell label="FL" tire={fl} size={size} mirror />
         <TireCell label="FR" tire={fr} size={size} />
         <TireCell label="RL" tire={rl} size={size} mirror />
         <TireCell label="RR" tire={rr} size={size} />
       </div>
-      <div style={{ fontFamily: fonts.body, fontSize: 15, color: colors.textMuted, letterSpacing: 2, textTransform: 'uppercase' }}>
-        Tires
-      </div>
+      {unreliable ? (
+        <div style={{
+          fontFamily: fonts.body,
+          fontSize: size === 'tiny' ? 11 : 13,
+          color: colors.danger,
+          letterSpacing: 1,
+          textTransform: 'uppercase',
+          textAlign: 'center',
+          lineHeight: 1.3,
+        }}>
+          Tires — data unreliable
+          {size === 'tiny' ? null : (
+            <div style={{ letterSpacing: 0, textTransform: 'none', color: colors.textMuted }}>
+              Shared memory layout mismatch
+            </div>
+          )}
+        </div>
+      ) : (
+        <div style={{ fontFamily: fonts.body, fontSize: 15, color: colors.textMuted, letterSpacing: 2, textTransform: 'uppercase' }}>
+          Tires
+        </div>
+      )}
     </div>
   )
 }
