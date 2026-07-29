@@ -97,8 +97,14 @@ export default function BattleWidget() {
 
     if (mode === 'relative') {
       const speed = Math.max(playerSpeed, 5)   // avoid divide-by-zero when stopped
+      // Cars in the pit lane are excluded, not because they are uninteresting
+      // but because their lap_dist is not a position on the racing line: LMU
+      // measures the pit lane backwards from the start/finish line, so a car in
+      // its box at Sebring reads about -1100 m. signedTrackDist() then wraps
+      // that to ~+1700 m and drops a stationary car into the middle of the
+      // relative order. (Measured with tools/lmu-probe, 2026-07-29.)
       const withDist = vehicles
-        .filter((v) => v.id !== player.id)
+        .filter((v) => v.id !== player.id && !v.in_pits && v.lap_dist >= 0)
         .map((v) => ({ v, dist: signedTrackDist(v.lap_dist, player.lap_dist, effTrackLength) }))
       const ahead = withDist.filter((x) => x.dist > 0).sort((a, b) => a.dist - b.dist).slice(0, count)
       const behind = withDist.filter((x) => x.dist <= 0).sort((a, b) => b.dist - a.dist).slice(0, count)
