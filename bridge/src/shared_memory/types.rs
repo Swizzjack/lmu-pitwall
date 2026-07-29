@@ -1,26 +1,16 @@
-/// rF2 Shared Memory struct definitions (C-compatible layout)
-/// Based on rF2SharedMemoryMapPlugin / rF2State.h + rF2Data.cs (TheIronWolfModding)
-///
-/// Layout: #[repr(C, packed(4))] matches the C++ #pragma pack(push, 4)
-/// Field order MUST match exactly — even one missing field shifts all subsequent offsets.
+//! The rF2 telemetry and scoring records, as Le Mans Ultimate embeds them.
+//!
+//! Originally transcribed from the rFactor 2 shared-memory plugin's `rF2State.h`
+//! (TheIronWolfModding). The bridge no longer reads that plugin's buffers — see
+//! [`super::lmu_data`] — but LMU carries the same per-vehicle and scoring-info
+//! records verbatim inside its own mapping, so these definitions stayed while
+//! the containers around them went.
+//!
+//! Layout: `#[repr(C, packed(4))]` matches the C++ `#pragma pack(push, 4)`.
+//! Field order MUST match exactly — one missing field shifts every offset after
+//! it, and the result still decodes as valid floats.
 
-// ---------------------------------------------------------------------------
-// Constants
-// ---------------------------------------------------------------------------
 
-pub const MAX_MAPPED_VEHICLES: usize = 128;
-pub const MAX_MAPPED_IDS: usize = 512;
-
-// Named shared-memory buffer identifiers (Windows MMF names)
-pub const TELEMETRY_BUFFER_NAME: &str = "$rFactor2SMMP_Telemetry$";
-pub const SCORING_BUFFER_NAME: &str = "$rFactor2SMMP_Scoring$";
-pub const RULES_BUFFER_NAME: &str = "$rFactor2SMMP_Rules$";
-pub const MULTI_RULES_BUFFER_NAME: &str = "$rFactor2SMMP_MultiRules$";
-pub const FORCE_FEEDBACK_BUFFER_NAME: &str = "$rFactor2SMMP_ForceFeedback$";
-pub const GRAPHICS_BUFFER_NAME: &str = "$rFactor2SMMP_Graphics$";
-pub const PIT_INFO_BUFFER_NAME: &str = "$rFactor2SMMP_PitInfo$";
-pub const WEATHER_BUFFER_NAME: &str = "$rFactor2SMMP_Weather$";
-pub const EXTENDED_BUFFER_NAME: &str = "$rFactor2SMMP_Extended$";
 
 // ---------------------------------------------------------------------------
 // Primitive building blocks
@@ -56,7 +46,12 @@ pub struct rF2Wheel {
     pub mSuspensionDeflection: f64,          // meters
     pub mRideHeight: f64,                    // meters
     pub mSuspForce: f64,                     // pushrod load in Newtons
-    pub mBrakeTemp: f64,                     // Celsius
+    pub mBrakeTemp: f64,                     // Kelvin. Both the rF2 SDK header and LMU's own
+                                             // SharedMemoryInterface.hpp comment this as "Celsius",
+                                             // but the value is Kelvin in practice — main.rs
+                                             // subtracts 273.15 and the dashboard's °C thresholds
+                                             // only make sense that way. See BRAKE_TEMP_K_* below.
+                                             // Recheck if LMU ever fixes the header comment.
     pub mBrakePressure: f64,                 // 0.0-1.0 (future: true kPa)
 
     pub mRotation: f64,                      // radians/sec
@@ -347,351 +342,134 @@ pub struct rF2ScoringInfo {
     pub mServerName: [u8; 32],             // server name
     pub mStartET: f32,                      // event start time (seconds since midnight)  ← f32!
     pub mAvgPathWetness: f64,              // average wetness on racing line (0–1)
-    pub mExpansion: [u8; 200],             // reserved
+
+    // --- LMU-native fields, carved out of the former mExpansion[200] ---
+    //
+    // LMU adds fields to this struct by consuming reserve bytes rather than
+    // extending it: 13 bytes named here + mExpansion[187] = the original 200,
+    // so the struct size is unchanged (asserted in the tests below). We were
+    // already reading these bytes — they just had no names.
+    //
+    // Verified against LMU's official SharedMemoryInterface.hpp (shipped in
+    // the game's Support\SharedMemoryInterface folder), 1.3 spec.
+    pub mSessionTimeRemaining: f32,        // seconds left in session
+    pub mTimeOfDay: f32,                    // seconds since midnight
+    pub mIsFixedSetup: u8,                  // 1 if the session enforces a fixed setup
+    pub mTrackGripLevel: u8,                // 0=green,1=low,2=medium,3=high,4=saturated
+    /// Sky type, same 0–10 scale as `WeatherForecastNode::sky_type` from the
+    /// REST API: 0=clear, 4=overcast, 6=cloudy & light rain, 10=overcast & storm.
+    pub mCloudCoverage: u8,
+    pub mTrackLimitsStepsPerPenalty: u8,   // steps that add up to one penalty
+    /// Divisor for `rF2VehicleTelemetry::mTrackLimitsSteps`: steps per point.
+    pub mTrackLimitsStepsPerPoint: u8,
+
+    pub mExpansion: [u8; 187],             // reserved (was 200 before the fields above)
     pub mPointer2: [u8; 8],                // padding for pointer (64-bit plugin)
 }
 
 // ---------------------------------------------------------------------------
-// Rules (track/flag rules, safety car)
+// Layout-drift detection
 // ---------------------------------------------------------------------------
 
-#[repr(C, packed(4))]
-#[derive(Clone, Copy)]
-pub struct rF2TrackRulesAction {
-    pub mCommand: i32,                      // recommended action command
-    pub mID: i32,                           // slot ID if applicable
-    pub mET: f64,                           // elapsed time event occurred
-}
-
-#[repr(C, packed(4))]
-#[derive(Clone, Copy)]
-pub struct rF2TrackRulesParticipant {
-    pub mID: i32,                           // slot ID
-    pub mFrozenOrder: i16,                  // 0-based frozen order (-1 if not frozen)
-    pub mPlace: i16,                        // 1-based race position
-    pub mYellowSeverity: f32,              // 0.0–1.0 contribution to yellow
-    pub mCurrentRelativeDistance: f64,     // current position around track
-    pub mRelativeLaps: i32,                // laps relative to leader
-    pub mColumnAssignment: i32,            // 0=left, 1=right column
-    pub mPositionAssignment: i32,          // 0-based position within column
-    pub mPitsOpen: u8,                      // 1 if vehicle may enter pits
-    pub mUpToSpeed: u8,                     // 1 if vehicle is up to required speed
-    pub mUnused: [u8; 2],
-    pub mGoalRelativeDistance: f64,        // target distance around track
-    pub mMessage: [u8; 96],                // message for this participant
-    pub mExpansion: [u8; 192],             // reserved
-}
-
-#[repr(C, packed(4))]
-#[derive(Clone, Copy)]
-pub struct rF2Rules {
-    pub mTrackName: [u8; 64],
-    pub mSession: i32,
-    pub mCurrentET: f64,
-    pub mEndET: f64,
-    pub mMaxLaps: i32,
-    pub mLapDist: f64,
-    pub mNumActions: i32,
-    pub mActions: [rF2TrackRulesAction; 8],
-    pub mNumParticipants: i32,
-    pub mYellowFlagDetected: u8,
-    pub mYellowFlagLapsWasOverridden: u8,
-    pub mSafetyCarExists: u8,
-    pub mSafetyCarActive: u8,
-    pub mSafetyCarLaps: i32,
-    pub mSafetyCarThreshold: f32,
-    pub mSafetyCarLapDist: f64,
-    pub mSafetyCarLapDistAtStart: f32,
-    pub mPitLaneLapDistEntry: f32,
-    pub mPitLaneLapDistExit: f32,
-    pub mPitLaneStartDist: f32,
-    pub mTeleportLapDist: f32,
-    pub mExpansion: [u8; 256],
-    pub mParticipants: [rF2TrackRulesParticipant; MAX_MAPPED_VEHICLES],
-}
-
-// ---------------------------------------------------------------------------
-// Multi rules (simple per-vehicle flags)
-// ---------------------------------------------------------------------------
-
-#[repr(C, packed(4))]
-#[derive(Clone, Copy)]
-pub struct rF2MultiRulesParticipant {
-    pub mID: i32,
-    pub mExpansion: [u8; 52],
-}
-
-#[repr(C, packed(4))]
-#[derive(Clone, Copy)]
-pub struct rF2MultiRules {
-    pub mExpansion: [u8; 256],
-    pub mParticipants: [rF2MultiRulesParticipant; MAX_MAPPED_VEHICLES],
-}
-
-// ---------------------------------------------------------------------------
-// Force feedback (400 Hz buffer)
-// ---------------------------------------------------------------------------
-
-#[repr(C, packed(4))]
-#[derive(Debug, Clone, Copy)]
-pub struct rF2ForceFeedback {
-    pub mForceValue: f64,                   // current FFB value (−1.0 – 1.0)
-    pub mExpansion: [u8; 64],
-}
-
-// ---------------------------------------------------------------------------
-// Pit info / menu (100 Hz buffer)
-// ---------------------------------------------------------------------------
-
-#[repr(C, packed(4))]
-#[derive(Clone, Copy)]
-pub struct rF2PitMenu {
-    pub mCategoryIndex: i32,               // index of selected category
-    pub mCategoryName: [u8; 32],           // category name
-    pub mChoiceIndex: i32,                 // index of currently selected choice
-    pub mChoiceString: [u8; 32],           // human-readable selected choice
-    pub mNumChoices: i32,                  // number of choices in category
-    pub mExpansion: [u8; 256],
-}
-
-#[repr(C, packed(4))]
-#[derive(Clone, Copy)]
-pub struct rF2PitInfo {
-    pub mPitMenu: rF2PitMenu,
-    pub mExpansion: [u8; 256],
-}
-
-// ---------------------------------------------------------------------------
-// Weather (1 Hz buffer)
-// ---------------------------------------------------------------------------
-
-#[repr(C, packed(4))]
-#[derive(Debug, Clone, Copy)]
-pub struct rF2Weather {
-    pub mTrackNodeSize: f64,               // approximate distance between track nodes
-    pub mExpansion: [u8; 256],
-}
-
-// ---------------------------------------------------------------------------
-// Extended buffer (5 Hz) — physics options, damage, session transitions
-// ---------------------------------------------------------------------------
-
-#[repr(C, packed(4))]
-#[derive(Debug, Clone, Copy)]
-pub struct rF2PhysicsOptions {
-    pub mTractionControl: u8,              // 0=off … 3=high
-    pub mAntiLockBrakes: u8,              // 0=off … 2=high
-    pub mStabilityControl: u8,            // 0=off … 2=high
-    pub mAutoShift: u8,                    // 0=off,1=upshifts,2=downshifts,3=all
-    pub mAutoClutch: u8,                  // 0=off,1=on
-    pub mInvulnerable: u8,
-    pub mOppositeLock: u8,
-    pub mSteeringHelp: u8,                // 0=off … 3=high
-    pub mBrakingHelp: u8,                 // 0=off … 2=high
-    pub mSpinRecovery: u8,
-    pub mAutoPit: u8,
-    pub mAutoLift: u8,
-    pub mAutoBlip: u8,
-    pub mFuelMult: u8,
-    pub mTireMult: u8,
-    pub mMechFail: u8,                     // 0=off,1=realistic,2=finish race
-    pub mAllowPitcrewPush: u8,
-    pub mRepeatShifts: u8,
-    pub mHoldClutch: u8,
-    pub mAutoReverse: u8,
-    pub mAlternateNeutral: u8,
-    pub mAIControl: u8,                    // 1 if vehicle is under AI control
-    pub mUnused1: u8,
-    pub mUnused2: u8,
-    pub mManualShiftOverrideTime: f32,
-    pub mAutoShiftOverrideTime: f32,
-    pub mSpeedSensitiveSteering: f32,
-    pub mSteerRatioSpeed: f32,
-}
-
-#[repr(C, packed(4))]
-#[derive(Debug, Clone, Copy)]
-pub struct rF2TrackedDamage {
-    pub mMaxImpactMagnitude: f64,
-    pub mAccumulatedImpactMagnitude: f64,
-}
-
-#[repr(C, packed(4))]
-#[derive(Debug, Clone, Copy)]
-pub struct rF2VehScoringCapture {
-    pub mID: i32,
-    pub mPlace: u8,
-    pub mIsPlayer: u8,
-    pub mFinishStatus: i8,
-    pub mPad: u8,
-}
-
-#[repr(C, packed(4))]
-#[derive(Clone, Copy)]
-pub struct rF2SessionTransitionCapture {
-    pub mGamePhase: u8,
-    pub mSession: i32,
-    pub mNumScoringVehicles: i32,
-    pub mScoringVehicles: [rF2VehScoringCapture; MAX_MAPPED_VEHICLES],
-}
-
-#[repr(C, packed(4))]
-#[derive(Clone, Copy)]
-pub struct rF2Extended {
-    pub mVersion: [u8; 12],                 // plugin version string (12 bytes in C++)
-    pub mIs64bit: u8,                        // 1 if 64-bit plugin
-    pub mPhysicsOptions: rF2PhysicsOptions,
-    pub mTrackedDamages: [rF2TrackedDamage; MAX_MAPPED_VEHICLES],
-    pub mInRealtimeFC: u8,
-    pub mMultiSessionRulesV1: [u8; 1024],
-    pub mExpansion: [u8; 1032],
-}
-
-// ---------------------------------------------------------------------------
-// Top-level buffer wrappers (what is actually mapped into shared memory)
-// ---------------------------------------------------------------------------
-
-/// Header present at the start of every mapped buffer.
-/// Read mVersionUpdateBegin before and mVersionUpdateEnd after reading payload;
-/// if they differ a torn read occurred — discard and retry.
-#[repr(C, packed(4))]
-#[derive(Debug, Clone, Copy)]
-pub struct rF2MappedBufferHeader {
-    pub mVersionUpdateBegin: u32,
-    pub mVersionUpdateEnd: u32,
-}
-
-/// Complete telemetry buffer (C++: rF2Telemetry)
-/// Layout: header + mBytesUpdatedHint + mNumVehicles + mVehicles[128]
-#[repr(C, packed(4))]
-#[derive(Clone, Copy)]
-pub struct rF2TelemetryBuffer {
-    pub mVersionUpdateBegin: u32,
-    pub mVersionUpdateEnd: u32,
-    pub mBytesUpdatedHint: i32,            // partial-update hint (0 = full buffer)
-    pub mNumVehicles: i32,                 // how many entries in mVehicles are valid
-    pub mVehicles: [rF2VehicleTelemetry; MAX_MAPPED_VEHICLES],
-}
-
-/// Complete scoring buffer (C++: rF2Scoring)
-/// Layout: header + mBytesUpdatedHint + mScoringInfo + mVehicles[128]
-/// NOTE: mVehicles lives HERE in the buffer, NOT inside rF2ScoringInfo.
-#[repr(C, packed(4))]
-#[derive(Clone, Copy)]
-pub struct rF2ScoringBuffer {
-    pub mVersionUpdateBegin: u32,
-    pub mVersionUpdateEnd: u32,
-    pub mBytesUpdatedHint: i32,
-    pub mScoringInfo: rF2ScoringInfo,
-    pub mVehicles: [rF2VehicleScoring; MAX_MAPPED_VEHICLES],
-}
-
-/// Complete rules buffer (C++: rF2Rules)
-#[repr(C, packed(4))]
-#[derive(Clone, Copy)]
-pub struct rF2RulesBuffer {
-    pub mVersionUpdateBegin: u32,
-    pub mVersionUpdateEnd: u32,
-    pub mBytesUpdatedHint: i32,
-    pub mRules: rF2Rules,
-}
-
-/// Complete extended buffer (C++: rF2Extended)
-#[repr(C, packed(4))]
-#[derive(Clone, Copy)]
-pub struct rF2ExtendedBuffer {
-    pub mVersionUpdateBegin: u32,
-    pub mVersionUpdateEnd: u32,
-    pub mBytesUpdatedHint: i32,
-    pub mExtended: rF2Extended,
-}
-
-/// Complete weather buffer (C++: rF2Weather)
-#[repr(C, packed(4))]
-#[derive(Debug, Clone, Copy)]
-pub struct rF2WeatherBuffer {
-    pub mVersionUpdateBegin: u32,
-    pub mVersionUpdateEnd: u32,
-    pub mBytesUpdatedHint: i32,
-    pub mWeather: rF2Weather,
-}
-
-// ---------------------------------------------------------------------------
-// LMU Extended buffer — tembob64/LMU_SharedMemoryMapPlugin
-//
-// This is the buffer written by the tembob64 fork of rF2SharedMemoryMapPlugin.
-// It uses the SAME MMF name ($rFactor2SMMP_Extended$) but a completely
-// different struct layout.  When "EnableDirectMemoryAccess": 1 is set in the
-// LMU plugin config, the DMA fields (TC, ARB, motor map, …) are populated.
-//
-// Layout derived from LMU_State.h in tembob64/LMU_SharedMemoryMapPlugin.
-// Field order MUST match the C++ struct exactly (pack(4) rules apply).
-// ---------------------------------------------------------------------------
-
-/// Flat representation of the tembob64 LMU Extended shared-memory buffer.
+/// Outcome of sanity-checking the per-wheel block of a vehicle telemetry entry.
 ///
-/// The C++ struct `LMU_Extended : public LMU_MappedBufferHeader` lays out the
-/// header fields first (via base-class inheritance), followed by the derived
-/// fields listed here.  With `#[repr(C, packed(4))]` the Rust compiler inserts
-/// padding identical to MSVC's `#pragma pack(push, 4)`.
+/// `mWheels` is the **last** field of [`rF2VehicleTelemetry`], so every field
+/// the game adds ahead of it shifts the entire block. A shifted block still
+/// decodes as perfectly valid `f64`s — just meaningless ones. Since LMU appends
+/// native fields to this struct on game updates (see the "LMU v1.3" block
+/// above), a version bump can silently turn every tire and brake reading into
+/// garbage with no other symptom.
 ///
-/// Key DMA fields (populated when `mDirectMemoryAccessEnabled == 1`):
-///   - `mpTractionControl`  — TC level
-///   - `mFront_ABR / mRear_ABR` — anti-roll bar settings
-///   - `mpMotorMap`          — engine/motor map name (up to 15 chars + NUL)
-///   - `mpBrakeMigration`    — brake migration step
-///   - `mpBrakeMigrationMax` — max brake migration steps
-///   - energy / fuel values  — hybrid battery & energy store
-#[repr(C, packed(4))]
-#[derive(Clone, Copy)]
-pub struct LmuExtendedBuffer {
-    // --- LMU_MappedBufferHeader (base class) ---
-    pub mVersionUpdateBegin: u32,        // incremented before write
-    pub mVersionUpdateEnd: u32,          // incremented after  write
-    pub mBytesUpdatedHint: i32,
+/// Two things make this less likely than it sounds, verified against LMU's
+/// official `SharedMemoryInterface.hpp` (shipped in the game's
+/// `Support\SharedMemoryInterface` folder) as of v1.4:
+///
+///  * `mExpansion: [u8; 20]` sits directly ahead of `mWheels`. S397 spends
+///    those reserve bytes first, and doing so does *not* move the wheel block.
+///  * Our field order still matches that header exactly, through to `mWheels`.
+///
+/// The check therefore guards against a real but not imminent failure mode.
+///
+/// The bounds below are deliberately wide. They are not there to validate
+/// physics, only to notice that we are no longer reading wheels at all.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WheelDataStatus {
+    /// Values are within physically possible bounds.
+    Ok,
+    /// The block is entirely zeroed — normal in menus and before the player
+    /// takes control of a car.
+    Idle,
+    /// Values are impossible; the struct layout no longer matches the game.
+    Implausible(&'static str),
+}
 
-    // --- LMU_Extended own fields ---
-    pub mVersion: [u8; 12],              // plugin version string
-    pub mIs64bit: u8,                    // 1 if 64-bit plugin
-    pub mInRealtimeFC: u8,
-    pub mSessionStarted: u8,
-    // 1 byte padding auto-inserted here (align u64 to 4)
-    pub mTicksSessionStarted: u64,
-    pub mTicksSessionEnded: u64,
+/// Tire and carcass temperature bounds, Kelvin (≈ -73 °C … 227 °C).
+const WHEEL_TEMP_K_MIN: f64 = 200.0;
+const WHEEL_TEMP_K_MAX: f64 = 500.0;
+/// Brake temperature bounds, Kelvin (≈ -73 °C … 1327 °C).
+const BRAKE_TEMP_K_MIN: f64 = 200.0;
+const BRAKE_TEMP_K_MAX: f64 = 1600.0;
+/// Tire pressure upper bound, kPa (LMU runs roughly 130–200).
+const TIRE_PRESSURE_KPA_MAX: f64 = 600.0;
 
-    pub mDirectMemoryAccessEnabled: u8,  // 1 when DMA is active
-    // 3 bytes padding auto-inserted here (align i32 to 4)
-    pub mUnsubscribedBuffersMask: i32,   // bitmask of disabled buffers
+impl rF2VehicleTelemetry {
+    /// Sanity-check the wheel block to detect shared-memory layout drift.
+    ///
+    /// Note this cannot catch a change in *meaning* — if LMU switched
+    /// `mBrakeTemp` from Kelvin to Celsius the values would still land inside
+    /// these bounds. It only catches the block having moved.
+    pub fn wheel_data_status(&self) -> WheelDataStatus {
+        let mut all_zero = true;
 
-    // --- DMA: electronics / driver aids ---
-    pub mpBrakeMigration: i32,           // current brake migration setting
-    pub mpBrakeMigrationMax: i32,        // maximum brake migration steps
-    pub mpTractionControl: i32,          // TC level
-    pub mpMotorMap: [u8; 16],            // engine map name (NUL-terminated)
-    pub mChangedParamType: i32,          // type of last changed param (event)
-    pub mChangedParamValue: [u8; 16],    // value of last changed param (event)
-    pub mFront_ABR: i32,                 // front anti-roll bar setting
-    pub mRear_ABR: i32,                  // rear  anti-roll bar setting
+        for i in 0..4 {
+            let w = self.mWheels[i];
+            let temps = w.mTemperature;
+            let carcass = w.mTireCarcassTemperature;
+            let brake = w.mBrakeTemp;
+            let pressure = w.mPressure;
+            let wear = w.mWear;
 
-    // --- DMA: penalties ---
-    pub mPenaltyType: i32,
-    pub mPenaltyCount: i32,
-    pub mPenaltyLeftLaps: i32,
-    pub mPendingPenaltyType1: i32,
-    pub mPendingPenaltyType2: i32,
-    pub mPendingPenaltyType3: i32,
-    pub mCuts: f32,
-    pub mCutsPoints: i32,
+            // NaN and infinity are the strongest signal available: real
+            // telemetry never contains them, misaligned bytes often do.
+            for v in [temps[0], temps[1], temps[2], carcass, brake, pressure, wear] {
+                if !v.is_finite() {
+                    return WheelDataStatus::Implausible("non-finite wheel value");
+                }
+                if v != 0.0 {
+                    all_zero = false;
+                }
+            }
 
-    // --- DMA: hybrid / energy (6 × f64 block from process memory) ---
-    pub mCurrentBatteryValue: f64,       // current battery charge (J or %)
-    pub mMaxBatteryValue: f64,           // max battery capacity
-    pub mCurrentEnergyValue: f64,        // current energy store (ERS/KERS)
-    pub mMaxEnergyValue: f64,            // max energy store
-    pub mCurrentFuelValue: f64,          // current fuel (litres)
-    pub mMaxFuelValue: f64,              // fuel tank capacity (litres)
-    pub mEnergyLastLap: f32,             // energy consumed on last lap
-    pub mFuelLastLap: f32,               // fuel consumed on last lap
+            // Every field is range-checked only once it is populated. LMU fills
+            // the wheel block progressively — setup pressures are present while
+            // physics has not yet produced temperatures — so a zero means "no
+            // data yet", never "out of range".
+            if temps
+                .iter()
+                .any(|t| *t != 0.0 && (*t < WHEEL_TEMP_K_MIN || *t > WHEEL_TEMP_K_MAX))
+            {
+                return WheelDataStatus::Implausible("tire temperature out of range");
+            }
+            if carcass != 0.0 && (carcass < WHEEL_TEMP_K_MIN || carcass > WHEEL_TEMP_K_MAX) {
+                return WheelDataStatus::Implausible("carcass temperature out of range");
+            }
+            if brake != 0.0 && (brake < BRAKE_TEMP_K_MIN || brake > BRAKE_TEMP_K_MAX) {
+                return WheelDataStatus::Implausible("brake temperature out of range");
+            }
+            if pressure < 0.0 || pressure > TIRE_PRESSURE_KPA_MAX {
+                return WheelDataStatus::Implausible("tire pressure out of range");
+            }
+            if !(0.0..=1.0).contains(&wear) {
+                return WheelDataStatus::Implausible("tire wear out of range");
+            }
+        }
+
+        if all_zero {
+            WheelDataStatus::Idle
+        } else {
+            WheelDataStatus::Ok
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -702,4 +480,134 @@ pub struct LmuExtendedBuffer {
 pub fn bytes_to_str(bytes: &[u8]) -> &str {
     let end = bytes.iter().position(|&b| b == 0).unwrap_or(bytes.len());
     std::str::from_utf8(&bytes[..end]).unwrap_or("<invalid utf8>")
+}
+
+#[cfg(test)]
+mod layout_tests {
+    use super::*;
+
+    /// Naming the LMU-native fields inside the old `mExpansion[200]` must not
+    /// move a single byte — LMU carves them out of the reserve block rather
+    /// than extending the struct. If this ever fails, the scoring buffer is
+    /// misaligned and every per-vehicle scoring read is wrong.
+    #[test]
+    fn scoring_info_size_is_unchanged() {
+        assert_eq!(std::mem::size_of::<rF2ScoringInfo>(), 548);
+        assert_eq!(std::mem::size_of::<rF2VehicleScoring>(), 584);
+    }
+
+    /// The 13 named bytes plus the shrunken reserve must still add up to the
+    /// original 200-byte expansion block.
+    #[test]
+    fn named_fields_fit_the_old_expansion_block() {
+        let named = std::mem::size_of::<f32>() * 2 + std::mem::size_of::<u8>() * 5;
+        assert_eq!(named, 13);
+        assert_eq!(named + 187, 200);
+    }
+
+    /// `mWheels` must stay the last field of the telemetry struct — the entire
+    /// layout-drift argument rests on it, and `wheel_data_status()` only makes
+    /// sense while it holds.
+    #[test]
+    fn wheels_are_last_in_vehicle_telemetry() {
+        let offset = std::mem::offset_of!(rF2VehicleTelemetry, mWheels);
+        let wheels = std::mem::size_of::<[rF2Wheel; 4]>();
+        assert_eq!(offset + wheels, std::mem::size_of::<rF2VehicleTelemetry>());
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Build a zeroed vehicle telemetry entry — the state the buffer is in
+    /// before the player takes control of a car.
+    fn zeroed_vehicle() -> rF2VehicleTelemetry {
+        // Safety: rF2VehicleTelemetry is a #[repr(C, packed)] POD made only of
+        // integers, floats and byte arrays, for which all-zero is a valid value.
+        unsafe { std::mem::zeroed() }
+    }
+
+    /// A wheel carrying realistic in-session values (Kelvin, kPa, 0–1 wear).
+    fn healthy_wheel() -> rF2Wheel {
+        let mut w: rF2Wheel = unsafe { std::mem::zeroed() };
+        w.mTemperature = [355.0, 360.0, 358.0]; // ≈ 82–87 °C
+        w.mTireCarcassTemperature = 350.0;
+        w.mBrakeTemp = 700.0; // ≈ 427 °C
+        w.mPressure = 165.0;
+        w.mWear = 0.94;
+        w
+    }
+
+    #[test]
+    fn zeroed_wheels_report_idle() {
+        let veh = zeroed_vehicle();
+        assert_eq!(veh.wheel_data_status(), WheelDataStatus::Idle);
+    }
+
+    #[test]
+    fn realistic_wheels_report_ok() {
+        let mut veh = zeroed_vehicle();
+        veh.mWheels = [healthy_wheel(); 4];
+        assert_eq!(veh.wheel_data_status(), WheelDataStatus::Ok);
+    }
+
+    #[test]
+    fn shifted_layout_is_detected() {
+        // Simulate layout drift: reinterpreting neighbouring struct bytes as
+        // wheel data yields values far outside any physical range.
+        let mut veh = zeroed_vehicle();
+        veh.mWheels = [healthy_wheel(); 4];
+        veh.mWheels[2].mTemperature[1] = 1.7e30;
+        assert!(matches!(
+            veh.wheel_data_status(),
+            WheelDataStatus::Implausible(_)
+        ));
+    }
+
+    #[test]
+    fn non_finite_values_are_detected() {
+        let mut veh = zeroed_vehicle();
+        veh.mWheels = [healthy_wheel(); 4];
+        veh.mWheels[0].mBrakeTemp = f64::NAN;
+        assert!(matches!(
+            veh.wheel_data_status(),
+            WheelDataStatus::Implausible(_)
+        ));
+    }
+
+    /// The wheel block populates progressively: setup pressures show up before
+    /// physics produces any temperature. That partial state must not be
+    /// mistaken for layout drift.
+    #[test]
+    fn pressure_without_temperatures_is_ok() {
+        let mut veh = zeroed_vehicle();
+        let mut w: rF2Wheel = unsafe { std::mem::zeroed() };
+        w.mPressure = 165.0;
+        veh.mWheels = [w; 4];
+        assert_eq!(veh.wheel_data_status(), WheelDataStatus::Ok);
+    }
+
+    /// A single unpopulated temperature channel alongside real ones is also
+    /// normal, and must not trip the check either.
+    #[test]
+    fn partially_populated_temperatures_are_ok() {
+        let mut veh = zeroed_vehicle();
+        let mut w = healthy_wheel();
+        w.mTemperature = [355.0, 0.0, 358.0];
+        veh.mWheels = [w; 4];
+        assert_eq!(veh.wheel_data_status(), WheelDataStatus::Ok);
+    }
+
+    /// Cold tires on a cold day must not trip the check.
+    #[test]
+    fn cold_session_start_is_ok() {
+        let mut veh = zeroed_vehicle();
+        let mut w = healthy_wheel();
+        w.mTemperature = [280.0; 3]; // ≈ 7 °C
+        w.mTireCarcassTemperature = 280.0;
+        w.mBrakeTemp = 285.0;
+        veh.mWheels = [w; 4];
+        assert_eq!(veh.wheel_data_status(), WheelDataStatus::Ok);
+    }
 }

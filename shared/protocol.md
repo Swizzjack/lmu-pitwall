@@ -52,4 +52,20 @@ Track info, weather, session type/duration.
 
 ### `ConnectionStatus` (event-based)
 
-Sent when LMU connects or disconnects.
+Sent when LMU connects or disconnects, and whenever `telemetry_valid` changes.
+
+| Field | Type | Notes |
+|---|---|---|
+| `game_connected` | bool | |
+| `plugin_version` | string | LMU's build number as `1.4.0.0`; `unknown` if unreadable. Named for the plugin era, when it carried a third-party DLL's version |
+| `telemetry_valid` | bool | `false` = shared-memory layout drift detected |
+| `telemetry_warning` | string \| null | reason, only set when `telemetry_valid` is `false` |
+
+`telemetry_valid` goes `false` when the per-wheel block fails a plausibility
+check, which means a game update moved the wheel block inside
+`rF2VehicleTelemetry`. Tire and brake readings are garbage in that state.
+
+Consumers must treat the tire block in `Telemetry` as unusable while
+`telemetry_valid` is `false` — the bridge keeps sending it rather than dropping
+fields, so the flag is the only signal. In this repo: `TireMonitor` greys the
+cells out, and the race engineer's tire rules stay silent.

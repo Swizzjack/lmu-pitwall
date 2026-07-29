@@ -2,7 +2,8 @@ use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 use crate::fuel::FuelSnapshot;
-use crate::shared_memory::types::{rF2ScoringBuffer, rF2TelemetryBuffer, MAX_MAPPED_VEHICLES};
+use crate::shared_memory::reader::{ScoringFrame, TelemetryFrame};
+use crate::shared_memory::types::WheelDataStatus;
 
 // ---------------------------------------------------------------------------
 // Domain enums
@@ -182,6 +183,11 @@ pub struct EngineerState {
     // Tires — mid-surface temperature in Celsius; FL FR RL RR
     pub tire_temps_c: [f32; 4],
     pub tire_wear_pct: [f32; 4],
+    /// `false` when the wheel block failed its plausibility check — the
+    /// shared-memory layout no longer matches what we parse, so `tire_temps_c`
+    /// and `tire_wear_pct` are garbage. Rules that speak about tires must stay
+    /// quiet rather than call out temperatures the driver does not have.
+    pub tire_data_valid: bool,
 
     // Damage
     pub damage: DamageState,
@@ -326,8 +332,8 @@ impl StateAggregator {
     /// Must be called before `advance()` so `previous()` still reflects last tick.
     pub fn build_state(
         &mut self,
-        sc: Option<&rF2ScoringBuffer>,
-        tel: Option<&rF2TelemetryBuffer>,
+        sc: Option<&ScoringFrame>,
+        tel: Option<&TelemetryFrame>,
         fuel: &FuelSnapshot,
         safety_car_active: bool,
         ve_available: Option<bool>,
@@ -360,12 +366,7 @@ impl StateAggregator {
         });
 
         // --- Player vehicle in scoring ---
-        let num_sc = sc.map(|s| (s.mScoringInfo.mNumVehicles as usize).min(MAX_MAPPED_VEHICLES)).unwrap_or(0);
-        let player_sc = sc.and_then(|s| {
-            s.mVehicles[..num_sc]
-                .iter()
-                .find(|v| v.mIsPlayer != 0)
-        });
+        let player_sc = sc.and_then(|s| s.player());
 
         let total_laps_driven = player_sc.map(|v| v.mTotalLaps as u32).unwrap_or(0);
         let player_position = player_sc.map(|v| v.mPlace as u32).unwrap_or(0);
@@ -389,7 +390,7 @@ impl StateAggregator {
                 .map(|v| &v.mVehicleClass[..])
                 .unwrap_or(&[]);
             let player_pos = player_position;
-            1 + s.mVehicles[..num_sc]
+            1 + s.mVehicles
                 .iter()
                 .filter(|v| v.mVehicleClass[..] == *player_class_name && (v.mPlace as u32) < player_pos)
                 .count() as u32
@@ -397,12 +398,13 @@ impl StateAggregator {
 
         // --- Player vehicle in telemetry ---
         let player_id = player_sc.map(|v| v.mID).unwrap_or(-1);
-        let num_tel = tel.map(|t| (t.mNumVehicles as usize).min(MAX_MAPPED_VEHICLES)).unwrap_or(0);
+        // LMU_Data states the player's telemetry slot outright, so prefer it
+        // over the ID scan the plugin path needed; the scan stays as a fallback
+        // for the frame where scoring and telemetry disagree about the player.
         let player_tel = tel.and_then(|t| {
-            t.mVehicles[..num_tel]
-                .iter()
-                .find(|v| v.mID == player_id)
-                .or_else(|| t.mVehicles.get(0))
+            t.player()
+                .or_else(|| t.mVehicles.iter().find(|v| v.mID == player_id))
+                .or_else(|| t.mVehicles.first())
         });
 
         // mVehicleClassEnum is on the telemetry struct, not scoring
@@ -456,7 +458,7 @@ impl StateAggregator {
 
         // Session best: minimum best_lap_time across all cars
         let best_lap_time_session = sc.and_then(|s| {
-            s.mVehicles[..num_sc]
+            s.mVehicles
                 .iter()
                 .filter(|v| v.mBestLapTime > 0.0)
                 .map(|v| v.mBestLapTime)
@@ -512,7 +514,7 @@ impl StateAggregator {
         // Gap behind: find vehicle directly behind player and get their mTimeBehindNext
         let gap_behind = sc.and_then(|s| {
             let player_pos = player_position;
-            s.mVehicles[..num_sc]
+            s.mVehicles
                 .iter()
                 .find(|v| v.mPlace as u32 == player_pos + 1)
                 .and_then(|v| if v.mTimeBehindNext > 0.0 { Some(v.mTimeBehindNext as f32) } else { None })
@@ -550,6 +552,14 @@ impl StateAggregator {
             (v.mWheels[2].mTemperature[1] - 273.15) as f32,
             (v.mWheels[3].mTemperature[1] - 273.15) as f32,
         ]).unwrap_or([0.0; 4]);
+
+        // Same plausibility check the bridge broadcasts as `telemetry_valid`,
+        // recomputed here so the engineer does not depend on the polling task.
+        // Defaults to true when there is no player telemetry: the tire values
+        // are then all zero and the rules already ignore that.
+        let tire_data_valid = player_tel
+            .map(|v| !matches!(v.wheel_data_status(), WheelDataStatus::Implausible(_)))
+            .unwrap_or(true);
 
         // LMU reports mWear as remaining grip (1.0 = new, 0.0 = destroyed),
         // opposite of the rF2 plugin docs. Invert so tire_wear_pct is wear (0 = fresh, 1 = worn).
@@ -601,7 +611,7 @@ impl StateAggregator {
             let mut ahead_last_lap: f64 = 0.0;
             let mut behind_place: u32 = u32::MAX;
             let mut behind_last_lap: f64 = 0.0;
-            for v in s.mVehicles[..num_sc].iter()
+            for v in s.mVehicles.iter()
                 .filter(|v| v.mIsPlayer == 0 && v.mVehicleClass[..] == *player_class_name)
             {
                 let in_pits = v.mInPits != 0;
@@ -674,6 +684,7 @@ impl StateAggregator {
             active_flags,
             tire_temps_c,
             tire_wear_pct,
+            tire_data_valid,
             damage,
             ambient_temp_c,
             track_temp_c,

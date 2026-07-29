@@ -48,7 +48,11 @@ function Row({ label, value, color, dot }: RowProps) {
 export default function ConnectionStatus() {
   const status = useTelemetryStore((s) => s.connection.status)
   const gameConnected = useTelemetryStore((s) => s.connection.game_connected)
-  const pluginVersion = useTelemetryStore((s) => s.connection.plugin_version)
+  // Still called plugin_version on the wire; since the port to LMU_Data it
+  // carries Le Mans Ultimate's own build number.
+  const gameVersion = useTelemetryStore((s) => s.connection.plugin_version)
+  const telemetryValid = useTelemetryStore((s) => s.connection.telemetry_valid)
+  const telemetryWarning = useTelemetryStore((s) => s.connection.telemetry_warning)
 
   // Count telemetry messages to derive update rate
   const currentEt = useTelemetryStore((s) => s.telemetry.current_et)
@@ -108,7 +112,29 @@ export default function ConnectionStatus() {
       <Row label="Game" value={gameConnected ? 'Connected' : 'Waiting'} color={gameColor} dot />
       <Row label="Updates/s" value={`${fps}`} color={fpsColor} />
 
-      {pluginVersion ? (
+      {/* Shared-memory layout drift — tire/brake values cannot be trusted */}
+      {gameConnected && !telemetryValid ? (
+        <div style={{
+          fontFamily: fonts.body,
+          fontSize: 13,
+          lineHeight: 1.35,
+          color: colors.danger,
+          border: `1px solid ${colors.danger}`,
+          borderRadius: 3,
+          padding: '5px 7px',
+        }}>
+          <div style={{ textTransform: 'uppercase', letterSpacing: 1, marginBottom: 2 }}>
+            Telemetry mismatch
+          </div>
+          <div style={{ color: colors.textMuted }}>
+            Tire &amp; brake data unreliable{telemetryWarning ? ` (${telemetryWarning})` : ''}.
+            A Le Mans Ultimate update most likely changed the shared-memory layout.
+            Check for a Pitwall update.
+          </div>
+        </div>
+      ) : null}
+
+      {gameVersion ? (
         <div style={{
           marginTop: 'auto',
           fontFamily: fonts.mono,
@@ -117,7 +143,7 @@ export default function ConnectionStatus() {
           borderTop: `1px solid ${colors.border}`,
           paddingTop: 4,
         }}>
-          Plugin v{pluginVersion}
+          {gameVersion === 'unknown' ? 'LMU version unknown' : `LMU ${gameVersion}`}
         </div>
       ) : null}
     </div>

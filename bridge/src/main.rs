@@ -33,7 +33,8 @@ use fuel::{FuelSnapshot, FuelTracker};
 use lap_tracker::LapTracker;
 use protocol::messages::{ServerMessage, TireData, Vec3, VehicleScoring, WeatherData};
 use shared_memory::reader::SharedMemoryReader;
-use shared_memory::types::{bytes_to_str, rF2RulesBuffer, rF2ScoringBuffer, rF2TelemetryBuffer, MAX_MAPPED_VEHICLES};
+use shared_memory::reader::{ScoringFrame, TelemetryFrame};
+use shared_memory::types::{bytes_to_str, WheelDataStatus};
 
 static LAST_DELTA_LOG: AtomicU64 = AtomicU64::new(0);
 use websocket::server::WebSocketServer;
@@ -43,9 +44,8 @@ use websocket::server::WebSocketServer;
 // ---------------------------------------------------------------------------
 
 struct TelemetryState {
-    telemetry: Option<rF2TelemetryBuffer>,
-    scoring: Option<rF2ScoringBuffer>,
-    rules: Option<rF2RulesBuffer>,
+    telemetry: Option<TelemetryFrame>,
+    scoring: Option<ScoringFrame>,
     is_connected: bool,
     electronics: ElectronicsSnapshot,
     /// Per-lap VE history from strategy/usage REST API; None = data unavailable.
@@ -64,7 +64,6 @@ impl TelemetryState {
         Self {
             telemetry: None,
             scoring: None,
-            rules: None,
             is_connected: false,
             electronics: ElectronicsSnapshot::default(),
             ve_history: None,
@@ -79,6 +78,15 @@ impl TelemetryState {
 // rF2 → ServerMessage transformations
 // ---------------------------------------------------------------------------
 
+/// `rF2ScoringInfo::mGamePhase` value for full course yellow.
+///
+/// This is the bridge's substitute for the plugin's `mSafetyCarActive`, which
+/// lived in the Rules buffer and has no `LMU_Data` equivalent. Confirmed
+/// against LMU 1.4 by `tools/lmu-probe`, which never observed the phase itself
+/// in four recorded sessions — the value comes from LMU's own
+/// `SharedMemoryInterface.hpp`, not from a measurement.
+const GAME_PHASE_FULL_COURSE_YELLOW: u8 = 6;
+
 fn session_type_str(session: i32) -> &'static str {
     match session {
         0 => "TestDay",
@@ -92,21 +100,16 @@ fn session_type_str(session: i32) -> &'static str {
 
 /// Extract a TelemetryUpdate for the given player slot ID (or first vehicle as fallback).
 fn build_telemetry_update(
-    tel: &rF2TelemetryBuffer,
+    tel: &TelemetryFrame,
     player_id: i32,
     fuel: &FuelSnapshot,
     ve_history: Option<Vec<f64>>,
     ve_available: Option<bool>,
 ) -> Option<ServerMessage> {
-    let num = (tel.mNumVehicles as usize).min(MAX_MAPPED_VEHICLES);
-    if num == 0 {
-        return None;
-    }
-
-    let veh = tel.mVehicles[..num]
-        .iter()
-        .find(|v| v.mID == player_id)
-        .unwrap_or(&tel.mVehicles[0]);
+    let veh = tel
+        .player()
+        .or_else(|| tel.mVehicles.iter().find(|v| v.mID == player_id))
+        .or_else(|| tel.mVehicles.first())?;
 
     let lv = veh.mLocalVel;
     let speed_ms = (lv.x * lv.x + lv.y * lv.y + lv.z * lv.z).sqrt();
@@ -182,21 +185,19 @@ fn build_telemetry_update(
 }
 
 /// Build a ScoringUpdate and return the player slot ID found in scoring data.
-fn build_scoring_update(sc: &rF2ScoringBuffer, tel: Option<&rF2TelemetryBuffer>) -> (ServerMessage, i32) {
+fn build_scoring_update(sc: &ScoringFrame, tel: Option<&TelemetryFrame>) -> (ServerMessage, i32) {
     let info = &sc.mScoringInfo;
-    let num = (info.mNumVehicles as usize).min(MAX_MAPPED_VEHICLES);
     let mut player_id = -1i32;
 
     // Build a lookup: vehicle ID → mVirtualEnergy from telemetry buffer
     let ve_map: std::collections::HashMap<i32, f32> = tel.map(|t| {
-        let tel_num = (t.mNumVehicles as usize).min(MAX_MAPPED_VEHICLES);
-        t.mVehicles[..tel_num]
+        t.mVehicles
             .iter()
             .map(|tv| (tv.mID, tv.mVirtualEnergy))
             .collect()
     }).unwrap_or_default();
 
-    let vehicles: Vec<VehicleScoring> = sc.mVehicles[..num]
+    let vehicles: Vec<VehicleScoring> = sc.mVehicles
         .iter()
         .map(|v| {
             if v.mIsPlayer != 0 {
@@ -279,7 +280,7 @@ fn build_electronics_update(snap: &ElectronicsSnapshot) -> ServerMessage {
     }
 }
 
-fn build_session_info(sc: &rF2ScoringBuffer, forecast: Vec<garage_api::WeatherForecastNode>) -> ServerMessage {
+fn build_session_info(sc: &ScoringFrame, forecast: Vec<garage_api::WeatherForecastNode>) -> ServerMessage {
     let info = &sc.mScoringInfo;
     // mDarkCloud is unreliable in LMU (often stuck at 0). Derive cloudiness from the
     // START node's sky_type instead (0=clear…10=heavy overcast+storm → 0.0–1.0).
@@ -295,8 +296,7 @@ fn build_session_info(sc: &rF2ScoringBuffer, forecast: Vec<garage_api::WeatherFo
     let (wind_speed_live, wind_rel_deg) = if horiz_speed < 0.1 {
         (None, None)
     } else {
-        let num = (info.mNumVehicles as usize).min(MAX_MAPPED_VEHICLES);
-        let rel = sc.mVehicles[..num]
+        let rel = sc.mVehicles
             .iter()
             .find(|v| v.mIsPlayer != 0)
             .map(|player| {
@@ -321,11 +321,10 @@ fn build_session_info(sc: &rF2ScoringBuffer, forecast: Vec<garage_api::WeatherFo
         let fnode = forecast.first();
         let fspeed = fnode.and_then(|n| n.wind_speed).filter(|&s| s >= 0.1);
         if let Some(spd) = fspeed {
-            let num = (info.mNumVehicles as usize).min(MAX_MAPPED_VEHICLES);
             let frel = fnode
                 .and_then(|n| n.wind_direction)
                 .and_then(|dir| {
-                    sc.mVehicles[..num]
+                    sc.mVehicles
                         .iter()
                         .find(|v| v.mIsPlayer != 0)
                         .map(|player| {
@@ -371,9 +370,8 @@ fn build_session_info(sc: &rF2ScoringBuffer, forecast: Vec<garage_api::WeatherFo
 }
 
 fn build_vehicle_status(
-    tel: Option<&rF2TelemetryBuffer>,
-    sc:  Option<&rF2ScoringBuffer>,
-    rules: Option<&rF2RulesBuffer>,
+    tel: Option<&TelemetryFrame>,
+    sc:  Option<&ScoringFrame>,
     player_id: i32,
     wearables: &garage_api::WearablesSnapshot,
 ) -> ServerMessage {
@@ -381,12 +379,10 @@ fn build_vehicle_status(
     let (overheating, any_detached, dent_severity, last_impact_magnitude, last_impact_et,
          tire_flat, tire_detached) = tel
         .and_then(|t| {
-            let num = (t.mNumVehicles as usize).min(MAX_MAPPED_VEHICLES);
-            if num == 0 { return None; }
-            let veh = t.mVehicles[..num]
-                .iter()
-                .find(|v| v.mID == player_id)
-                .unwrap_or(&t.mVehicles[0]);
+            let veh = t
+                .player()
+                .or_else(|| t.mVehicles.iter().find(|v| v.mID == player_id))
+                .or_else(|| t.mVehicles.first())?;
             Some((
                 veh.mOverheating != 0,
                 veh.mDetached != 0,
@@ -413,8 +409,7 @@ fn build_vehicle_status(
     let (yellow_flag_state, sector_flags, start_light, game_phase, player_flag, individual_phase, player_under_yellow, player_sector) =
         sc.map(|sc| {
             let info = &sc.mScoringInfo;
-            let num = (info.mNumVehicles as usize).min(MAX_MAPPED_VEHICLES);
-            let (pflag, iphase, punder, psector) = sc.mVehicles[..num]
+            let (pflag, iphase, punder, psector) = sc.mVehicles
                 .iter()
                 .find(|v| v.mID == player_id || v.mIsPlayer != 0)
                 .map(|v| (v.mFlag, v.mIndividualPhase, v.mUnderYellow != 0, v.mSector))
@@ -439,10 +434,14 @@ fn build_vehicle_status(
         })
         .unwrap_or((-1, [0; 3], 0, 0, 0, 0, false, -1));
 
-    // --- Safety car from rules buffer ---
-    let (safety_car_active, safety_car_exists) = rules
-        .map(|r| (r.mRules.mSafetyCarActive != 0, r.mRules.mSafetyCarExists != 0))
-        .unwrap_or((false, false));
+    // --- Safety car ---
+    // The plugin's Rules buffer carried mSafetyCarActive/mSafetyCarExists.
+    // LMU_Data has no equivalent, and mGamePhase == 6 (full course yellow) is
+    // the closest honest substitute: it means the field is under caution, which
+    // is what every consumer of this flag actually reacts to. What is genuinely
+    // gone is "is a safety car configured for this session at all" — a question
+    // nothing in the product asked.
+    let safety_car_active = game_phase == GAME_PHASE_FULL_COURSE_YELLOW;
 
     ServerMessage::VehicleStatusUpdate {
         overheating,
@@ -464,7 +463,6 @@ fn build_vehicle_status(
         player_under_yellow,
         player_sector,
         safety_car_active,
-        safety_car_exists,
     }
 }
 
@@ -484,6 +482,13 @@ async fn task_polling(
 ) {
     let mut reader = SharedMemoryReader::new();
     let mut was_connected = false;
+
+    // Plugin version string, read from shared memory on connect.
+    // Reported to the dashboard as `plugin_version` for protocol compatibility;
+    // it is now LMU's own build number rather than a third-party DLL's version.
+    let mut game_version = String::new();
+    // Latest layout-check failure reason; `None` while telemetry looks sane.
+    let mut telemetry_warning: Option<String> = None;
 
     // Track session identity for VE history clearing: "<session>/<track_name>"
     let mut last_session_key = String::new();
@@ -534,33 +539,78 @@ async fn task_polling(
                     continue;
                 }
 
-                let tel   = reader.read_telemetry();
-                let sc    = reader.read_scoring();
-                let rules = reader.read_rules();
+                // One copy yields both records, and they are guaranteed to
+                // come from the same instant — the plugin path read two
+                // independently version-stamped buffers and had to hope.
+                let frame = reader.read_frame();
+                let (tel, sc) = match frame {
+                    Some(f) => (Some(f.telemetry), Some(f.scoring)),
+                    // A torn read is a skipped update, not a disconnect. Keep
+                    // the previous frame so the widgets hold their last value
+                    // instead of blanking for a tick.
+                    None => (None, None),
+                };
 
                 // Build electronics snapshot directly from telemetry.
                 let player_id_from_sc = sc.as_ref().and_then(|s| {
-                    let num = (s.mScoringInfo.mNumVehicles as usize).min(MAX_MAPPED_VEHICLES);
-                    s.mVehicles[..num].iter().find(|v| v.mIsPlayer != 0).map(|v| v.mID)
+                    s.player().map(|v| v.mID)
                 }).unwrap_or(-1);
 
                 let electronics = tel.as_ref().and_then(|t| {
-                    let num = (t.mNumVehicles as usize).min(MAX_MAPPED_VEHICLES);
-                    t.mVehicles[..num]
-                        .iter()
-                        .find(|v| v.mID == player_id_from_sc || player_id_from_sc == -1)
-                        .or_else(|| t.mVehicles.get(0))
+                    t.player()
+                        .or_else(|| t.mVehicles.iter().find(|v| v.mID == player_id_from_sc))
+                        .or_else(|| t.mVehicles.first())
                         .map(ElectronicsSnapshot::from_telemetry)
                 }).unwrap_or_default();
 
                 // Derive ve_available from telemetry.
                 let ve_available = tel.as_ref().and_then(|t| {
-                    let num = (t.mNumVehicles as usize).min(MAX_MAPPED_VEHICLES);
-                    t.mVehicles[..num]
-                        .iter()
-                        .find(|v| v.mID == player_id_from_sc || player_id_from_sc == -1)
+                    t.player()
+                        .or_else(|| t.mVehicles.iter().find(|v| v.mID == player_id_from_sc))
                         .map(|v| v.mVirtualEnergy > 0.0 || v.mBatteryChargeFraction > 0.0)
                 });
+
+                // --- shared-memory layout sanity check ---
+                // mWheels is the last field of rF2VehicleTelemetry, so any field
+                // LMU adds ahead of it shifts every tire and brake reading without
+                // any other symptom. Surface that instead of publishing garbage.
+                //
+                // Gated on `was_connected`: the health ticker owns the connect
+                // transition, and it reads the game version and resets the
+                // warning there. Broadcasting from here first would go out with
+                // an empty game_version and then be overwritten by the connect
+                // message.
+                let wheel_status = tel.as_ref().and_then(|t| {
+                    t.player()
+                        .or_else(|| t.mVehicles.iter().find(|v| v.mID == player_id_from_sc))
+                        .map(|v| v.wheel_data_status())
+                });
+
+                let new_warning = match wheel_status {
+                    Some(WheelDataStatus::Implausible(reason)) => Some(reason.to_string()),
+                    _ => None,
+                };
+
+                if was_connected && new_warning != telemetry_warning {
+                    match &new_warning {
+                        Some(reason) => warn!(
+                            "Telemetry layout check FAILED ({}) — tire and brake values are \
+                             unreliable. A Le Mans Ultimate update most likely moved the \
+                             wheel block inside the shared-memory layout.",
+                            reason
+                        ),
+                        None => info!("Telemetry layout check passed"),
+                    }
+                    telemetry_warning = new_warning.clone();
+                    let msg = ServerMessage::ConnectionStatus {
+                        game_connected: true,
+                        plugin_version: game_version.clone(),
+                        telemetry_valid: new_warning.is_none(),
+                        telemetry_warning: new_warning,
+                    };
+                    ws.broadcast(msg.clone());
+                    let _ = connection_status_tx.send(Some(msg));
+                }
 
                 // Session-change detection → clear VE history + track player name.
                 if let Some(ref sc_data) = sc {
@@ -576,10 +626,8 @@ async fn task_polling(
                     last_session_key = key;
 
                     // Track player name for strategy/usage lookup.
-                    let num_vehs = (sc_data.mScoringInfo.mNumVehicles as usize).min(MAX_MAPPED_VEHICLES);
-                    if let Some(name) = sc_data.mVehicles[..num_vehs]
-                        .iter()
-                        .find(|v| v.mIsPlayer != 0)
+                    if let Some(name) = sc_data
+                        .player()
                         .map(|v| bytes_to_str(&v.mDriverName).to_string())
                     {
                         if !name.is_empty() {
@@ -589,9 +637,12 @@ async fn task_polling(
                 }
 
                 let mut s = state.write().await;
-                s.telemetry   = tel;
-                s.scoring     = sc;
-                s.rules       = rules;
+                if tel.is_some() {
+                    s.telemetry = tel;
+                }
+                if sc.is_some() {
+                    s.scoring = sc;
+                }
                 s.electronics = electronics;
                 if let Some(v) = ve_available {
                     s.ve_available = Some(v);
@@ -673,9 +724,16 @@ async fn task_polling(
                     (false, true) => {
                         // LMU just started (or bridge started while LMU was already running).
                         info!("Connected to Le Mans Ultimate shared memory — broadcasting on ws://0.0.0.0:{}", ws_port);
+                        game_version = reader
+                            .game_version()
+                            .unwrap_or_else(|| String::from("unknown"));
+                        info!("Le Mans Ultimate version: {}", game_version);
+                        telemetry_warning = None;
                         let msg = ServerMessage::ConnectionStatus {
                             game_connected: true,
-                            plugin_version: String::from("rF2SharedMemoryMapPlugin"),
+                            plugin_version: game_version.clone(),
+                            telemetry_valid: true,
+                            telemetry_warning: None,
                         };
                         ws.broadcast(msg.clone());
                         let _ = connection_status_tx.send(Some(msg));
@@ -683,11 +741,15 @@ async fn task_polling(
                         was_connected = true;
                     }
                     (true, false) => {
-                        // LMU exited or plugin unloaded.
+                        // LMU exited, or switched its shared memory off.
                         warn!("Lost connection to Le Mans Ultimate — waiting for reconnect");
+                        game_version.clear();
+                        telemetry_warning = None;
                         let msg = ServerMessage::ConnectionStatus {
                             game_connected: false,
                             plugin_version: String::new(),
+                            telemetry_valid: true,
+                            telemetry_warning: None,
                         };
                         ws.broadcast(msg.clone());
                         let _ = connection_status_tx.send(Some(msg));
@@ -695,7 +757,6 @@ async fn task_polling(
                         s.is_connected = false;
                         s.telemetry    = None;
                         s.scoring      = None;
-                        s.rules        = None;
                         s.ve_history   = None;
                         s.ve_available = None;
                         s.wearables    = garage_api::WearablesSnapshot::default();
@@ -797,16 +858,14 @@ async fn task_broadcaster(
             // Update fuel tracker on every telemetry tick (needs mutable access outside lock).
             if send_tel {
                 if let (Some(ref tel), Some(ref sc)) = (&s.telemetry, &s.scoring) {
-                    let num_tel = (tel.mNumVehicles as usize).min(MAX_MAPPED_VEHICLES);
-                    let num_sc  = (sc.mScoringInfo.mNumVehicles as usize).min(MAX_MAPPED_VEHICLES);
 
-                    let current_fuel = tel.mVehicles[..num_tel]
-                        .iter()
-                        .find(|v| v.mID == player_id)
-                        .unwrap_or_else(|| &tel.mVehicles[0])
-                        .mFuel;
+                    let current_fuel = tel
+                        .player()
+                        .or_else(|| tel.mVehicles.iter().find(|v| v.mID == player_id))
+                        .map(|v| v.mFuel)
+                        .unwrap_or(0.0);
 
-                    let player_sc = sc.mVehicles[..num_sc]
+                    let player_sc = sc.mVehicles
                         .iter()
                         .find(|v| v.mID == player_id || v.mIsPlayer != 0);
 
@@ -855,7 +914,6 @@ async fn task_broadcaster(
                 Some(build_vehicle_status(
                     s.telemetry.as_ref(),
                     s.scoring.as_ref(),
-                    s.rules.as_ref(),
                     player_id,
                     &s.wearables,
                 ))
@@ -939,8 +997,10 @@ async fn task_broadcaster(
 
             let s = state.read().await;
             if s.is_connected {
-                let safety_car_active = s.rules.as_ref()
-                    .map(|r| r.mRules.mSafetyCarActive != 0)
+                // Same substitute as in build_vehicle_status: full course
+                // yellow is what LMU_Data can tell us about a caution.
+                let safety_car_active = s.scoring.as_ref()
+                    .map(|sc| sc.mScoringInfo.mGamePhase == GAME_PHASE_FULL_COURSE_YELLOW)
                     .unwrap_or(false);
                 let ve_available = s.ve_available;
 

@@ -1,27 +1,97 @@
-//! Shared Memory Reader — opens and reads LMU/rF2 Named Memory-Mapped Files.
+//! Shared-memory reader — reads LMU's built-in `LMU_Data` mapping.
 //!
-//! Windows-only implementation. Non-Windows builds (e.g. during development in
-//! WSL2) get a stub that always reports "not connected" so the rest of the
-//! codebase compiles without platform-specific guards everywhere.
+//! Windows-only. Non-Windows builds (development in WSL2, Linux CI) get a stub
+//! that always reports "not connected", so the rest of the codebase compiles
+//! without platform guards scattered through it.
 //!
-//! # Version-tracking / torn-read protection
+//! # Why there is no version block
 //!
-//! Every rF2 mapped buffer starts with two `u32` fields:
-//!   `mVersionUpdateBegin` — incremented *before* a write
-//!   `mVersionUpdateEnd`   — incremented *after*  a write
+//! Every `$rFactor2SMMP_*$` buffer began with `mVersionUpdateBegin` /
+//! `mVersionUpdateEnd`: the plugin bumped the first before a write and the
+//! second after, so a reader could copy the buffer, compare the two, and know
+//! whether a write had landed in the middle of its copy. `LMU_Data` has no such
+//! pair — the game writes into it directly.
 //!
-//! When they are equal the buffer is consistent. If they differ a write was in
-//! progress; we spin briefly and retry up to `MAX_READ_RETRIES` times.
+//! The substitute is a **witness read**. Before copying we note two clocks that
+//! the writer necessarily touches (`mCurrentET` at 5 Hz, the player's
+//! `mElapsedTime` at 100 Hz) plus the two car counts; after copying we read
+//! them again. If nothing moved, no write happened while we were reading and
+//! the copy is coherent. If something moved, we retry.
+//!
+//! This is strictly weaker than a version block — a writer could in principle
+//! start and finish a whole update inside our copy, leaving the witnesses back
+//! where they started — but at a 10 ms write interval against a copy that takes
+//! tens of microseconds, that is not a case that occurs. What it does catch is
+//! the real observed failure: `tools/lmu-probe` recorded scoring and telemetry
+//! disagreeing about the car count in 0.04–0.08% of samples, always while cars
+//! were joining the session, and never once when the field was stable.
+//!
+//! # Why the copy is partial
+//!
+//! The mapping is 324 KB, most of it a 65 KB scoring stream we never read and
+//! 104 vehicle slots of which a full grid uses a third. Copying only the
+//! occupied slots keeps a frame at ~80 KB for a 34-car race, which matters
+//! twice over: it is less work at 50 Hz, and a shorter copy is a smaller window
+//! for a write to land in.
 
-use crate::shared_memory::types::{
-    rF2ExtendedBuffer, rF2RulesBuffer, rF2ScoringBuffer, rF2TelemetryBuffer, rF2WeatherBuffer,
-    LmuExtendedBuffer,
-    EXTENDED_BUFFER_NAME, RULES_BUFFER_NAME, SCORING_BUFFER_NAME, TELEMETRY_BUFFER_NAME,
-    WEATHER_BUFFER_NAME,
-};
+use crate::shared_memory::types::{rF2ScoringInfo, rF2VehicleScoring, rF2VehicleTelemetry};
 
-/// Maximum number of retry attempts when a torn read is detected.
+/// Retries when the witnesses show a write landed inside our copy.
+#[cfg(target_os = "windows")]
 const MAX_READ_RETRIES: u32 = 5;
+
+// =============================================================================
+// Frame types — what the rest of the bridge consumes
+// =============================================================================
+
+/// One coherent scoring record: the session-wide info plus exactly the vehicle
+/// rows the game says are occupied.
+///
+/// Field names match the plugin's `rF2ScoringBuffer` so the consumers did not
+/// have to change when the source did. The difference that matters: `mVehicles`
+/// is trimmed to the live cars, not a fixed 128-slot array with unused tail.
+#[allow(non_snake_case)]
+#[derive(Clone)]
+pub struct ScoringFrame {
+    pub mScoringInfo: rF2ScoringInfo,
+    pub mVehicles: Vec<rF2VehicleScoring>,
+}
+
+/// One coherent telemetry record.
+#[allow(non_snake_case)]
+#[derive(Clone)]
+pub struct TelemetryFrame {
+    pub mVehicles: Vec<rF2VehicleTelemetry>,
+    /// Index of the player's car in `mVehicles`, when the game reports one.
+    ///
+    /// `LMU_Data` states this outright. The plugin path had to find the
+    /// player's scoring row by scanning for `mIsPlayer`, take its `mID`, and
+    /// then scan the telemetry buffer for a matching ID — two searches that
+    /// could disagree. [`ScoringFrame::player`] still scans, because scoring
+    /// carries no equivalent index.
+    pub player_idx: Option<usize>,
+}
+
+impl ScoringFrame {
+    /// The player's scoring row, if the session has one.
+    pub fn player(&self) -> Option<&rF2VehicleScoring> {
+        self.mVehicles.iter().find(|v| v.mIsPlayer != 0)
+    }
+}
+
+impl TelemetryFrame {
+    /// The player's telemetry row, if the game reports a player car.
+    pub fn player(&self) -> Option<&rF2VehicleTelemetry> {
+        self.mVehicles.get(self.player_idx?)
+    }
+}
+
+/// A scoring and telemetry pair read from the same coherent copy.
+#[derive(Clone)]
+pub struct SharedMemoryFrame {
+    pub scoring: ScoringFrame,
+    pub telemetry: TelemetryFrame,
+}
 
 // =============================================================================
 // Windows implementation
@@ -30,12 +100,13 @@ const MAX_READ_RETRIES: u32 = 5;
 #[cfg(target_os = "windows")]
 mod imp {
     use super::*;
+    use crate::shared_memory::lmu_data::*;
     use std::ffi::CString;
     use windows_sys::Win32::{
         Foundation::{CloseHandle, HANDLE},
         System::Memory::{
-            MapViewOfFile, MEMORY_MAPPED_VIEW_ADDRESS, OpenFileMappingA, UnmapViewOfFile,
-            FILE_MAP_READ,
+            MapViewOfFile, OpenFileMappingA, UnmapViewOfFile, FILE_MAP_READ,
+            MEMORY_MAPPED_VIEW_ADDRESS,
         },
     };
 
@@ -43,33 +114,29 @@ mod imp {
     // MappedBuffer — one opened + memory-mapped shared-memory file
     // -------------------------------------------------------------------------
 
-    pub(super) struct MappedBuffer {
+    struct MappedBuffer {
         handle: HANDLE,
         ptr: *mut core::ffi::c_void,
     }
 
-    // Safety: The pointer is valid for the lifetime of MappedBuffer.
-    // We only read from it (never write), and access is serialised by the
-    // caller (SharedMemoryReader is not shared across threads without
-    // external synchronisation).
+    // Safety: the pointer stays valid for the lifetime of MappedBuffer. We only
+    // ever read from it, and SharedMemoryReader is not shared across threads
+    // without external synchronisation.
     unsafe impl Send for MappedBuffer {}
     unsafe impl Sync for MappedBuffer {}
 
     impl MappedBuffer {
-        /// Try to open a named Windows Memory-Mapped File.
+        /// Open a named Windows memory-mapped file.
         ///
-        /// Returns `None` when LMU is not running (the file does not exist).
-        pub(super) fn open(name: &str) -> Option<Self> {
+        /// `None` means LMU is not running, or its built-in shared memory is
+        /// switched off (*Settings → Gameplay → Enable Plugins*).
+        fn open(name: &str) -> Option<Self> {
             let cname = CString::new(name).ok()?;
             unsafe {
-                // FILE_MAP_READ = 4; bInheritHandle = 0 (FALSE)
-                let handle =
-                    OpenFileMappingA(FILE_MAP_READ, 0, cname.as_ptr() as *const u8);
+                let handle = OpenFileMappingA(FILE_MAP_READ, 0, cname.as_ptr() as *const u8);
                 if handle.is_null() {
                     return None;
                 }
-                // Map the entire file (dwNumberOfBytesToMap = 0)
-                // windows-sys 0.59: MapViewOfFile returns MEMORY_MAPPED_VIEW_ADDRESS
                 let mapped = MapViewOfFile(handle, FILE_MAP_READ, 0, 0, 0);
                 if mapped.Value.is_null() {
                     CloseHandle(handle);
@@ -79,17 +146,49 @@ mod imp {
             }
         }
 
-        /// Return a typed const pointer into the mapped view.
+        /// Copy one value out of the mapping.
+        ///
+        /// # Safety
+        /// `offset + size_of::<T>()` must lie inside the mapping, and `T` must
+        /// be plain data for which every bit pattern is valid. Both hold for
+        /// the offsets in [`lmu_data`], which are derived with `offset_of!` and
+        /// bounds-checked in that module's tests.
         #[inline]
-        pub(super) fn as_ptr<T>(&self) -> *const T {
-            self.ptr as *const T
+        unsafe fn at<T: Copy>(&self, offset: usize) -> T {
+            core::ptr::read_unaligned((self.ptr as *const u8).add(offset) as *const T)
+        }
+
+        /// Copy `n` consecutive records starting at `offset`.
+        ///
+        /// Copied as raw bytes in one `memcpy` rather than element by element.
+        /// The vehicle arrays are `packed(4)`, so their elements are contiguous
+        /// with no padding to skip, and going through `u8` sidesteps the
+        /// alignment requirement `copy_nonoverlapping::<T>` would impose on a
+        /// pointer into someone else's mapping. Speed is not the only reason:
+        /// a shorter copy is a shorter window for the game to write into the
+        /// middle of it.
+        ///
+        /// # Safety
+        /// As [`MappedBuffer::at`], for the whole `n`-element run.
+        #[inline]
+        unsafe fn slice<T: Copy>(&self, offset: usize, n: usize) -> Vec<T> {
+            let mut out: Vec<T> = Vec::with_capacity(n);
+            core::ptr::copy_nonoverlapping(
+                (self.ptr as *const u8).add(offset),
+                out.as_mut_ptr() as *mut u8,
+                n * std::mem::size_of::<T>(),
+            );
+            // Safety: the `n` elements were just initialised by the copy above,
+            // and `T: Copy` means there is nothing to drop if this is a partial
+            // pattern the game has not filled in — every bit pattern is valid.
+            out.set_len(n);
+            out
         }
     }
 
     impl Drop for MappedBuffer {
         fn drop(&mut self) {
             unsafe {
-                // windows-sys 0.59: UnmapViewOfFile takes MEMORY_MAPPED_VIEW_ADDRESS
                 UnmapViewOfFile(MEMORY_MAPPED_VIEW_ADDRESS { Value: self.ptr });
                 CloseHandle(self.handle);
             }
@@ -97,130 +196,154 @@ mod imp {
     }
 
     // -------------------------------------------------------------------------
-    // Version-checked read helper
+    // Witness — the stand-in for the version block LMU_Data does not have
     // -------------------------------------------------------------------------
 
-    /// Copy a version-stamped rF2 buffer, retrying when a torn write is detected.
+    /// The values re-read after a copy to decide whether the copy is coherent.
     ///
-    /// The layout assumption: the first two `u32` words of `*ptr` are
-    /// `mVersionUpdateBegin` (offset 0) and `mVersionUpdateEnd` (offset 4).
-    /// All top-level rF2 buffer types satisfy this contract.
-    pub(super) unsafe fn read_versioned<T: Copy>(ptr: *const T) -> Option<T> {
-        for _ in 0..MAX_READ_RETRIES {
-            // Volatile reads prevent the compiler from hoisting these out of
-            // the loop or merging them with the struct copy below.
-            let begin = core::ptr::read_volatile(ptr as *const u32);
+    /// `mElapsedTime` is compared as raw bits rather than as a float: this is a
+    /// "did these bytes change" test, not a numeric comparison, and a NaN in
+    /// the mapping would make `==` answer no to itself forever.
+    #[derive(PartialEq, Eq, Clone, Copy)]
+    struct Witness {
+        scoring_et: u64,
+        player_et: u64,
+        num_vehicles: i32,
+        active_vehicles: u8,
+        player_idx: u8,
+        player_has_vehicle: u8,
+    }
 
-            // Full struct copy from shared memory (handles unaligned access).
-            let data = core::ptr::read_unaligned(ptr);
+    impl MappedBuffer {
+        unsafe fn witness(&self) -> Witness {
+            let active_vehicles: u8 = self.at(OFF_ACTIVE_VEHICLES);
+            let player_idx: u8 = self.at(OFF_PLAYER_IDX);
+            let player_has_vehicle: u8 = self.at(OFF_PLAYER_HAS_VEHICLE);
 
-            let end = core::ptr::read_volatile((ptr as *const u32).add(1));
+            // Reading the player's physics clock needs a slot index, and an
+            // out-of-range one would address past the array. Fall back to slot
+            // 0, which always exists: the witness only has to be *a* value that
+            // the writer touches, not a specific car's.
+            let idx = if player_has_vehicle != 0 && (player_idx as usize) < MAX_MAPPED_VEHICLES {
+                player_idx as usize
+            } else {
+                0
+            };
+            let et_off =
+                OFF_TELEM_INFO + idx * std::mem::size_of::<rF2VehicleTelemetry>() + OFF_VEH_ELAPSED;
 
-            if begin == end {
-                return Some(data);
+            Witness {
+                scoring_et: self.at::<f64>(OFF_SCORING_ET).to_bits(),
+                player_et: self.at::<f64>(et_off).to_bits(),
+                num_vehicles: self.at(OFF_SCORING_NUM_VEHICLES),
+                active_vehicles,
+                player_idx,
+                player_has_vehicle,
             }
-            // Writer is active — pause briefly and retry.
-            core::hint::spin_loop();
         }
-        // Still torn after all retries; caller should skip this frame.
-        None
     }
 
     // -------------------------------------------------------------------------
-    // SharedMemoryReader — Windows concrete implementation
+    // SharedMemoryReader
     // -------------------------------------------------------------------------
 
     pub struct SharedMemoryReader {
-        telemetry: Option<MappedBuffer>,
-        scoring: Option<MappedBuffer>,
-        extended: Option<MappedBuffer>,
-        weather: Option<MappedBuffer>,
-        rules: Option<MappedBuffer>,
+        lmu: Option<MappedBuffer>,
     }
 
     impl SharedMemoryReader {
         pub fn new() -> Self {
-            SharedMemoryReader {
-                telemetry: None,
-                scoring: None,
-                extended: None,
-                weather: None,
-                rules: None,
-            }
+            SharedMemoryReader { lmu: None }
         }
 
-        /// Attempt to open all LMU shared-memory buffers.
-        ///
-        /// It is not an error if only some buffers are available — LMU may not
-        /// have started the plugin yet. Returns `true` if at least the
-        /// telemetry buffer was opened successfully.
+        /// Map `LMU_Data`. `true` once the game is publishing it.
         pub fn open(&mut self) -> bool {
-            self.telemetry = MappedBuffer::open(TELEMETRY_BUFFER_NAME);
-            self.scoring = MappedBuffer::open(SCORING_BUFFER_NAME);
-            self.extended = MappedBuffer::open(EXTENDED_BUFFER_NAME);
-            self.weather = MappedBuffer::open(WEATHER_BUFFER_NAME);
-            self.rules = MappedBuffer::open(RULES_BUFFER_NAME);
-            self.telemetry.is_some()
+            self.lmu = MappedBuffer::open(LMU_DATA_NAME);
+            self.lmu.is_some()
         }
 
-        /// Release all mapped views and handles.
+        /// Release the mapped view and handle.
         ///
-        /// Called automatically on drop; exposed explicitly so the main loop
-        /// can close and reopen buffers when LMU restarts.
+        /// Called on drop; exposed so the main loop can close and reopen to
+        /// detect LMU starting or stopping without polling process lists.
         pub fn close(&mut self) {
-            self.telemetry = None;
-            self.scoring = None;
-            self.extended = None;
-            self.weather = None;
-            self.rules = None;
+            self.lmu = None;
         }
 
-        /// Returns `true` if the telemetry buffer is currently mapped (LMU
-        /// is running and the shared-memory plugin is active).
         pub fn is_connected(&self) -> bool {
-            self.telemetry.is_some()
+            self.lmu.is_some()
         }
 
-        /// Read the telemetry buffer (50 Hz).
+        /// LMU's build number as a dotted version, e.g. `14000` → `"1.4.0.0"`.
         ///
-        /// Returns `None` if LMU is not running or if all retries were
-        /// exhausted due to a persistent torn write.
-        pub fn read_telemetry(&self) -> Option<rF2TelemetryBuffer> {
-            let buf = self.telemetry.as_ref()?;
-            unsafe { read_versioned(buf.as_ptr::<rF2TelemetryBuffer>()) }
+        /// Replaces the plugin version string, which the bridge used to parse
+        /// out of a third-party buffer whose layout it could only guess at.
+        /// This one comes from the game.
+        pub fn game_version(&self) -> Option<String> {
+            let buf = self.lmu.as_ref()?;
+            let raw: i32 = unsafe { buf.at(OFF_GAME_VERSION) };
+            if raw <= 0 {
+                return None;
+            }
+            // 14000 → 1.4.0.0: major, minor, then the build in two digits.
+            let major = raw / 10000;
+            let minor = (raw / 1000) % 10;
+            let patch = (raw / 100) % 10;
+            let build = raw % 100;
+            Some(format!("{major}.{minor}.{patch}.{build}"))
         }
 
-        /// Read the scoring buffer (5 Hz).
-        pub fn read_scoring(&self) -> Option<rF2ScoringBuffer> {
-            let buf = self.scoring.as_ref()?;
-            unsafe { read_versioned(buf.as_ptr::<rF2ScoringBuffer>()) }
-        }
-
-        /// Read the extended buffer (5 Hz).
-        pub fn read_extended(&self) -> Option<rF2ExtendedBuffer> {
-            let buf = self.extended.as_ref()?;
-            unsafe { read_versioned(buf.as_ptr::<rF2ExtendedBuffer>()) }
-        }
-
-        /// Read the weather buffer (1 Hz).
-        pub fn read_weather(&self) -> Option<rF2WeatherBuffer> {
-            let buf = self.weather.as_ref()?;
-            unsafe { read_versioned(buf.as_ptr::<rF2WeatherBuffer>()) }
-        }
-
-        /// Read the LMU Extended buffer (tembob64 plugin, ~5 Hz).
+        /// Read one coherent scoring + telemetry frame.
         ///
-        /// Uses the same MMF name as the standard Extended buffer.
-        /// Returns `None` if the buffer is not mapped or a torn read occurred.
-        pub fn read_lmu_extended(&self) -> Option<LmuExtendedBuffer> {
-            let buf = self.extended.as_ref()?;
-            unsafe { read_versioned(buf.as_ptr::<LmuExtendedBuffer>()) }
-        }
+        /// `None` means either LMU is not mapped, or every retry saw a write
+        /// land inside the copy. Callers should keep their previous frame in
+        /// that case rather than treating it as a disconnect — a torn read is a
+        /// skipped update, not a lost game.
+        pub fn read_frame(&self) -> Option<SharedMemoryFrame> {
+            let buf = self.lmu.as_ref()?;
 
-        /// Read the rules buffer (~5 Hz) — contains safety car and flag rule state.
-        pub fn read_rules(&self) -> Option<rF2RulesBuffer> {
-            let buf = self.rules.as_ref()?;
-            unsafe { read_versioned(buf.as_ptr::<rF2RulesBuffer>()) }
+            for _ in 0..MAX_READ_RETRIES {
+                unsafe {
+                    let before = buf.witness();
+
+                    // A car count the game has not filled in yet, or one past
+                    // the end of the arrays, is not something to copy from.
+                    let n_scoring = (before.num_vehicles.max(0) as usize).min(MAX_MAPPED_VEHICLES);
+                    let n_telem = (before.active_vehicles as usize).min(MAX_MAPPED_VEHICLES);
+
+                    let scoring_info: rF2ScoringInfo = buf.at(OFF_SCORING_INFO);
+                    let veh_scoring: Vec<rF2VehicleScoring> = buf.slice(OFF_VEH_SCORING, n_scoring);
+                    let veh_telem: Vec<rF2VehicleTelemetry> = buf.slice(OFF_TELEM_INFO, n_telem);
+
+                    if buf.witness() != before {
+                        // The game wrote while we were copying. Give it the
+                        // rest of its slice rather than spinning on a writer
+                        // that is still mid-update.
+                        core::hint::spin_loop();
+                        continue;
+                    }
+
+                    let player_idx = if before.player_has_vehicle != 0
+                        && (before.player_idx as usize) < n_telem
+                    {
+                        Some(before.player_idx as usize)
+                    } else {
+                        None
+                    };
+
+                    return Some(SharedMemoryFrame {
+                        scoring: ScoringFrame {
+                            mScoringInfo: scoring_info,
+                            mVehicles: veh_scoring,
+                        },
+                        telemetry: TelemetryFrame {
+                            mVehicles: veh_telem,
+                            player_idx,
+                        },
+                    });
+                }
+            }
+            None
         }
     }
 }
@@ -240,7 +363,7 @@ mod imp {
             SharedMemoryReader
         }
 
-        /// Always returns `false` — shared memory is Windows-only.
+        /// Always `false` — shared memory is Windows-only.
         pub fn open(&mut self) -> bool {
             false
         }
@@ -251,27 +374,11 @@ mod imp {
             false
         }
 
-        pub fn read_telemetry(&self) -> Option<rF2TelemetryBuffer> {
+        pub fn game_version(&self) -> Option<String> {
             None
         }
 
-        pub fn read_scoring(&self) -> Option<rF2ScoringBuffer> {
-            None
-        }
-
-        pub fn read_extended(&self) -> Option<rF2ExtendedBuffer> {
-            None
-        }
-
-        pub fn read_weather(&self) -> Option<rF2WeatherBuffer> {
-            None
-        }
-
-        pub fn read_lmu_extended(&self) -> Option<LmuExtendedBuffer> {
-            None
-        }
-
-        pub fn read_rules(&self) -> Option<rF2RulesBuffer> {
+        pub fn read_frame(&self) -> Option<SharedMemoryFrame> {
             None
         }
     }
@@ -279,3 +386,51 @@ mod imp {
 
 // Re-export the platform-specific type as the single public API surface.
 pub use imp::SharedMemoryReader;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn zeroed_scoring() -> rF2VehicleScoring {
+        // Safety: rF2VehicleScoring is a packed POD of integers, floats and
+        // byte arrays, for which all-zero is a valid value.
+        unsafe { std::mem::zeroed() }
+    }
+
+    #[test]
+    fn player_row_is_found_by_the_is_player_flag() {
+        let mut a = zeroed_scoring();
+        a.mID = 7;
+        let mut b = zeroed_scoring();
+        b.mID = 9;
+        b.mIsPlayer = 1;
+
+        let frame = ScoringFrame {
+            mScoringInfo: unsafe { std::mem::zeroed() },
+            mVehicles: vec![a, b],
+        };
+        assert_eq!(frame.player().map(|v| v.mID), Some(9));
+    }
+
+    /// A spectating session has scoring rows but no player among them. Callers
+    /// branch on this, so it must be None rather than a silent slot 0.
+    #[test]
+    fn no_player_row_yields_none() {
+        let frame = ScoringFrame {
+            mScoringInfo: unsafe { std::mem::zeroed() },
+            mVehicles: vec![zeroed_scoring()],
+        };
+        assert!(frame.player().is_none());
+    }
+
+    /// `player_idx` comes straight out of shared memory, so an index past the
+    /// rows we copied must not panic on lookup.
+    #[test]
+    fn out_of_range_player_index_is_not_a_panic() {
+        let frame = TelemetryFrame {
+            mVehicles: Vec::new(),
+            player_idx: Some(3),
+        };
+        assert!(frame.player().is_none());
+    }
+}

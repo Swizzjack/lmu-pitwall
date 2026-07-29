@@ -35,8 +35,9 @@
  * player_under_yellow (bool) — from rF2VehicleScoring.mUnderYellow
  *   NOTE: Only set when crossing S/F under FCY. NOT set for local sector yellows.
  *
- * safety_car_active (bool) — from rF2Rules.mSafetyCarActive
- * safety_car_exists (bool) — from rF2Rules.mSafetyCarExists
+ * safety_car_active (bool) — derived from game_phase === 6 (full course yellow).
+ *   LMU_Data has no safety-car record; the plugin's Rules buffer used to carry
+ *   mSafetyCarActive/mSafetyCarExists, and neither survived the port.
  *
  * start_light (u8) — from rF2ScoringInfo.mStartLight:
  *   0 = off, 1–5 = red lights (count), 6 = green (go!)
