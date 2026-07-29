@@ -3,9 +3,11 @@
 Bump the patch version across all project files.
 
 Files updated:
-  - VERSION               (single source of truth)
+  - VERSION                              (single source of truth)
   - installer/lmu-pitwall-installer.iss  (#define MyAppVersion)
-  - bridge/Cargo.toml     (version = "...")
+  - bridge/Cargo.toml                    (version = "...")
+  - dashboard/package.json               ("version": "...")
+  - dashboard/package-lock.json          (top-level + packages[""] entries)
 
 Usage:
   python3 scripts/bump-version.py          # bump patch (1.0.1 → 1.0.2)
@@ -68,6 +70,46 @@ def update_package_json(new_version: str):
     )
     path.write_text(content)
 
+def update_package_lock(new_version: str):
+    """Keep package-lock.json in sync with package.json.
+
+    npm records the project version twice: once at the top level and once in
+    the packages[""] self-entry. Both are rewritten in place rather than via
+    json.dump so the rest of the (very large) lockfile stays byte-identical.
+    """
+    path = ROOT / "dashboard" / "package-lock.json"
+    if not path.exists():
+        return
+    content = path.read_text()
+
+    # Top-level "version", which npm always emits directly after "name".
+    content, n1 = re.subn(
+        r'\A(\{\s*"name"\s*:\s*"[^"]*",\s*"version"\s*:\s*")([^"]+)(")',
+        f'\\g<1>{new_version}\\3',
+        content,
+        count=1,
+    )
+    # The packages[""] self-entry.
+    content, n2 = re.subn(
+        r'(""\s*:\s*\{\s*"name"\s*:\s*"[^"]*",\s*"version"\s*:\s*")([^"]+)(")',
+        f'\\g<1>{new_version}\\3',
+        content,
+        count=1,
+    )
+
+    # Bailing out here is deliberate: a lockfile whose version drifts from
+    # package.json ships a silently inconsistent release, so fail loudly rather
+    # than let release.sh continue.
+    if not (n1 and n2):
+        print(
+            f"ERROR: package-lock.json not fully updated "
+            f"(top-level={n1}, packages[\"\"]={n2}). The npm lockfile format may "
+            f"have changed — fix it manually, then re-run.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
+    path.write_text(content)
+
 def main():
     part = "patch"
     for arg in sys.argv[1:]:
@@ -82,6 +124,11 @@ def main():
     old = read_version()
     new = bump(old, part)
 
+    # package-lock.json goes first: it is the only file whose patch can fail
+    # (npm may change the lockfile format), and it exits non-zero when it does.
+    # Running it first means such a failure leaves the tree fully untouched
+    # rather than half-bumped.
+    update_package_lock(new)
     write_version(new)
     update_iss(new)
     update_cargo_toml(new)
