@@ -98,7 +98,7 @@ pub fn get_options(conn: &Connection) -> Result<FuelCalcOptions> {
              COUNT(DISTINCT s.id) AS session_count,
              COUNT(l.id)          AS total_laps
          FROM sessions s
-         JOIN drivers d  ON d.session_id = s.id AND d.is_player = 1
+         JOIN drivers d  ON d.session_id = s.id AND d.is_self = 1
          JOIN laps    l  ON l.driver_id = d.id
          LEFT JOIN laps prev_l
                       ON prev_l.driver_id = l.driver_id
@@ -146,7 +146,7 @@ pub fn get_options(conn: &Connection) -> Result<FuelCalcOptions> {
     let mut fm_stmt = conn.prepare(
         &format!("SELECT s.track_venue, s.track_course, d.car_type, s.fuel_mult, MAX(s.date_time) AS latest_dt
          FROM sessions s
-         JOIN drivers d ON d.session_id = s.id AND d.is_player = 1
+         JOIN drivers d ON d.session_id = s.id AND d.is_self = 1
          WHERE {sess}
            AND s.fuel_mult IS NOT NULL
          GROUP BY s.track_venue, s.track_course, d.car_type, s.fuel_mult
@@ -495,7 +495,7 @@ fn valid_laps_base_sql(with_version_filter: bool, with_fuel_mult_filter: bool, i
     format!(
         "SELECT l.fuel_used, l.ve_used, l.lap_time, l.session_id
          FROM sessions s
-         JOIN drivers d  ON d.session_id = s.id AND d.is_player = 1
+         JOIN drivers d  ON d.session_id = s.id AND d.is_self = 1
          JOIN laps    l  ON l.driver_id = d.id
          LEFT JOIN laps prev_l
                       ON prev_l.driver_id = l.driver_id
@@ -570,7 +570,7 @@ fn query_fuel_mult(
     let sql = format!(
         "SELECT s.fuel_mult
          FROM sessions s
-         JOIN drivers d ON d.session_id = s.id AND d.is_player = 1
+         JOIN drivers d ON d.session_id = s.id AND d.is_self = 1
          WHERE s.track_venue    = ?1
            AND s.track_course   IS ?2
            AND d.car_type       = ?3
@@ -606,7 +606,7 @@ fn query_car_class(
         .query_row(
             "SELECT d.car_class
              FROM sessions s
-             JOIN drivers d ON d.session_id = s.id AND d.is_player = 1
+             JOIN drivers d ON d.session_id = s.id AND d.is_self = 1
              WHERE s.track_venue = ?1 AND s.track_course IS ?2 AND d.car_type = ?3
              LIMIT 1",
             rusqlite::params![track_venue, track_course, car_name],

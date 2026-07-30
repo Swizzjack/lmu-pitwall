@@ -630,8 +630,25 @@ async fn task_polling(
                         .player()
                         .map(|v| bytes_to_str(&v.mDriverName).to_string())
                     {
-                        if !name.is_empty() {
-                            last_player_name = name;
+                        if !name.is_empty() && name != last_player_name {
+                            last_player_name = name.clone();
+                            // The same name identifies us in a multiplayer
+                            // result, where the XML flags every human as the
+                            // player. Recording it here rather than at the
+                            // first completed lap means sitting in the garage
+                            // is already enough.
+                            tokio::task::spawn_blocking(move || {
+                                if let Ok(db) = post_race::database::get_db() {
+                                    if let Err(e) = post_race::live_laps::record_player_identity(
+                                        &db.lock(),
+                                        &name,
+                                        "live",
+                                        post_race::live_laps::now_unix(),
+                                    ) {
+                                        warn!("Could not record player name: {}", e);
+                                    }
+                                }
+                            });
                         }
                     }
                 }
@@ -815,6 +832,10 @@ async fn task_broadcaster(
     // All-drivers lap snapshot tracker.
     let mut lap_tracker = LapTracker::new();
 
+    // Per-lap fuel / VE / tire wear capture. Online result XMLs carry none of
+    // it, so this is the only record of a multiplayer stint's consumption.
+    let mut live_lap_recorder = post_race::live_laps::LiveLapRecorder::new();
+
     // Race engineer 10 Hz throttle.
     let mut last_engineer_tick = Instant::now() - Duration::from_millis(100);
     let mut had_drivers_snapshot = false;
@@ -834,7 +855,7 @@ async fn task_broadcaster(
         let send_electronics = now.duration_since(last_electronics) >= electronics_interval;
 
         // Hold the read lock only long enough to clone the messages.
-        let (tel_msg, sc_result, session_msg, electronics_msg, status_msg, all_drivers_result) = {
+        let (tel_msg, sc_result, session_msg, electronics_msg, status_msg, all_drivers_result, captured_lap) = {
             let s = state.read().await;
             if !s.is_connected {
                 continue;
@@ -927,6 +948,20 @@ async fn task_broadcaster(
                 None
             };
 
+            // Live lap capture: one owned row per player S/F crossing, written
+            // outside the lock below.
+            let captured_lap = if send_scoring {
+                s.scoring.as_ref().and_then(|sc| {
+                    live_lap_recorder.process(
+                        sc,
+                        s.telemetry.as_ref(),
+                        session_type_str(sc.mScoringInfo.mSession),
+                    )
+                })
+            } else {
+                None
+            };
+
             // Lap tracker: detect S/F crossings and build AllDriversUpdate.
             // Called inside the lock to avoid cloning large buffers.
             let all_drivers_result: Option<(ServerMessage, bool)> = if send_scoring {
@@ -948,9 +983,35 @@ async fn task_broadcaster(
                 None
             };
 
-            (tel_msg, sc_result, session_msg, electronics_msg, status_msg, all_drivers_result)
+            (tel_msg, sc_result, session_msg, electronics_msg, status_msg, all_drivers_result, captured_lap)
         };
         // Lock released — now broadcast without holding it.
+
+        // Persist the captured lap off the async runtime: once per lap, so the
+        // spawn costs less than the SQLite write it avoids blocking on.
+        if let Some(lap) = captured_lap {
+            // One line per lap, at info: this is the only evidence that the
+            // capture ran at all, and without it a session that quietly
+            // recorded nothing looks exactly like one the backfill failed on.
+            info!(
+                lap = lap.lap_num,
+                fuel = ?lap.fuel_level,
+                ve = ?lap.ve_level,
+                tw_fl = ?lap.tw_fl,
+                time = ?lap.lap_time,
+                "live lap captured"
+            );
+            tokio::task::spawn_blocking(move || {
+                match post_race::database::get_db() {
+                    Ok(db) => {
+                        if let Err(e) = post_race::live_laps::insert_live_lap(&db.lock(), &lap) {
+                            warn!("Could not store live lap data: {}", e);
+                        }
+                    }
+                    Err(e) => warn!("Could not open results database: {}", e),
+                }
+            });
+        }
 
         if let Some((sc_msg, pid)) = sc_result {
             player_id = pid;

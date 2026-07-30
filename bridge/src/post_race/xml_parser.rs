@@ -87,6 +87,10 @@ pub struct ParsedEvent {
 pub struct ParsedSession {
     /// E.g. "Practice1", "Qualify", "Race"
     pub session_type: String,
+    /// The `<Setting>` tag: "Multiplayer" online, "Race Weekend" / "Test Day"
+    /// offline. The only reliable online marker in the file — `isPlayer` is 1
+    /// for *every* human in a multiplayer result, not just the local one.
+    pub setting: Option<String>,
     pub track_venue: Option<String>,
     pub track_course: Option<String>,
     pub track_event: Option<String>,
@@ -317,6 +321,7 @@ pub fn parse_result_xml(path: &Path) -> Result<Vec<ParsedSession>> {
     let mut shared_race_laps: Option<u32> = None;
     let mut shared_fuel_mult: Option<f64> = None;
     let mut shared_tire_mult: Option<f64> = None;
+    let mut shared_setting: Option<String> = None;
 
     let mut sessions: Vec<ParsedSession> = Vec::new();
 
@@ -372,6 +377,7 @@ pub fn parse_result_xml(path: &Path) -> Result<Vec<ParsedSession>> {
                         race_laps: shared_race_laps,
                         fuel_mult: shared_fuel_mult,
                         tire_mult: shared_tire_mult,
+                        setting: shared_setting.clone(),
                         ..Default::default()
                     };
                     // Session-level metadata may be overridden inside the tag
@@ -637,6 +643,12 @@ pub fn parse_result_xml(path: &Path) -> Result<Vec<ParsedSession>> {
                             }
                             shared_tire_mult = v;
                         }
+                        "Setting" => {
+                            if let Some(s) = target_session {
+                                s.setting = Some(text.clone());
+                            }
+                            shared_setting = Some(text);
+                        }
                         _ => {}
                     }
                 }
@@ -779,13 +791,14 @@ mod tests {
         parse_result_xml(tmp.path()).unwrap()
     }
 
-    // Helper: parse from string directly (avoids tempfile dep in unit tests)
+    /// Helper: parse from a string. Each call gets its own file — tests run in
+    /// parallel, and a shared fixture path meant they overwrote each other's
+    /// XML mid-read.
     fn parse_str(xml: &str) -> Vec<ParsedSession> {
         use std::io::Write;
-        let dir = std::env::temp_dir();
-        let path = dir.join("lmu_pitwall_test.xml");
-        std::fs::write(&path, xml).unwrap();
-        parse_result_xml(&path).unwrap()
+        let mut tmp = tempfile::NamedTempFile::new().unwrap();
+        tmp.write_all(xml.as_bytes()).unwrap();
+        parse_result_xml(tmp.path()).unwrap()
     }
 
     #[test]

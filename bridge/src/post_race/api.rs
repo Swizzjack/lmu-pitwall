@@ -150,7 +150,9 @@ fn query_session_detail(
 
     // Fetch driver base data.
     let mut stmt = conn.prepare(
-        "SELECT id, name, car_type, car_class, car_number, team_name, is_player,
+        // `is_self`, not `is_player`: the frontend uses this field to put a ★
+        // on our own row, and online every driver in the file is a human.
+        "SELECT id, name, car_type, car_class, car_number, team_name, is_self,
                 position, class_position, best_lap_time, total_laps, pitstops, finish_status,
                 finish_time
          FROM drivers
@@ -821,10 +823,10 @@ fn post_race_fun_facts() -> ServerMessage {
 fn query_fun_facts(conn: &Connection) -> Result<(Vec<String>, Option<String>)> {
     let mut facts: Vec<String> = Vec::new();
 
-    // Player name (most frequent name with is_player = 1)
+    // Player name (most frequent name with is_self = 1)
     let player_name: Option<String> = conn
         .query_row(
-            "SELECT name FROM drivers WHERE is_player = 1 AND name != ''
+            "SELECT name FROM drivers WHERE is_self = 1 AND name != ''
              GROUP BY name ORDER BY COUNT(*) DESC LIMIT 1",
             [],
             |row| row.get(0),
@@ -864,11 +866,11 @@ fn query_fun_facts(conn: &Connection) -> Result<(Vec<String>, Option<String>)> {
         ));
     }
 
-    // Most driven car class (player only, filtered by name to avoid other is_player=1 entries)
+    // Most driven car class (player only; the name filter also keeps a renamed profile's sessions apart)
     let fav_class: Option<(String, i64)> = player_name.as_deref().and_then(|pname| {
         conn.query_row(
             "SELECT car_class, SUM(total_laps) as lap_cnt FROM drivers
-             WHERE is_player = 1 AND name = ?1 AND car_class IS NOT NULL AND car_class != ''
+             WHERE is_self = 1 AND name = ?1 AND car_class IS NOT NULL AND car_class != ''
              GROUP BY car_class ORDER BY lap_cnt DESC LIMIT 1",
             [pname],
             |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
@@ -883,7 +885,7 @@ fn query_fun_facts(conn: &Connection) -> Result<(Vec<String>, Option<String>)> {
         .query_row(
             "SELECT COUNT(*) FROM drivers d
              INNER JOIN sessions s ON s.id = d.session_id
-             WHERE d.is_player = 1 AND d.position = 1 AND s.session_type LIKE '%Race%'",
+             WHERE d.is_self = 1 AND d.position = 1 AND s.session_type LIKE '%Race%'",
             [],
             |r| r.get(0),
         )
@@ -895,7 +897,7 @@ fn query_fun_facts(conn: &Connection) -> Result<(Vec<String>, Option<String>)> {
         .query_row(
             "SELECT d.name, COUNT(*) as cnt FROM drivers d
              INNER JOIN sessions s ON s.id = d.session_id
-             WHERE d.is_player = 0 AND d.name IS NOT NULL AND d.name != ''
+             WHERE d.is_self = 0 AND d.name IS NOT NULL AND d.name != ''
              GROUP BY d.name ORDER BY cnt DESC LIMIT 1",
             [],
             |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
@@ -912,10 +914,10 @@ fn query_fun_facts(conn: &Connection) -> Result<(Vec<String>, Option<String>)> {
         }
     }
 
-    // Total pitstops (player only, filtered by name to avoid other is_player=1 entries)
+    // Total pitstops (player only; the name filter also keeps a renamed profile's sessions apart)
     let pitstops: i64 = player_name.as_deref().and_then(|pname| {
         conn.query_row(
-            "SELECT COALESCE(SUM(pitstops), 0) FROM drivers WHERE is_player = 1 AND name = ?1",
+            "SELECT COALESCE(SUM(pitstops), 0) FROM drivers WHERE is_self = 1 AND name = ?1",
             [pname],
             |r| r.get::<_, i64>(0),
         ).ok()
@@ -935,7 +937,7 @@ fn query_fun_facts(conn: &Connection) -> Result<(Vec<String>, Option<String>)> {
              FROM laps l
              INNER JOIN drivers d ON l.driver_id = d.id
              INNER JOIN sessions s ON l.session_id = s.id
-             WHERE d.is_player = 1
+             WHERE d.is_self = 1
                AND l.lap_time IS NOT NULL AND l.lap_time > 0
                AND l.is_pit = 0
                AND s.session_type LIKE '%Race%'
@@ -969,7 +971,7 @@ fn query_fun_facts(conn: &Connection) -> Result<(Vec<String>, Option<String>)> {
         .query_row(
             "SELECT s.date_time, COALESCE(s.track_venue, '?') FROM sessions s
              INNER JOIN drivers d ON d.session_id = s.id
-             WHERE d.is_player = 1 AND s.date_time IS NOT NULL
+             WHERE d.is_self = 1 AND s.date_time IS NOT NULL
              ORDER BY s.date_time ASC LIMIT 1",
             [],
             |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)),
@@ -986,7 +988,7 @@ fn query_fun_facts(conn: &Connection) -> Result<(Vec<String>, Option<String>)> {
         .query_row(
             "SELECT s.track_venue, d.total_laps FROM drivers d
              INNER JOIN sessions s ON s.id = d.session_id
-             WHERE d.is_player = 1 AND s.session_type LIKE '%Race%' AND d.total_laps IS NOT NULL
+             WHERE d.is_self = 1 AND s.session_type LIKE '%Race%' AND d.total_laps IS NOT NULL
              ORDER BY d.total_laps DESC LIMIT 1",
             [],
             |r| Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?)),
@@ -1014,10 +1016,10 @@ fn query_fun_facts(conn: &Connection) -> Result<(Vec<String>, Option<String>)> {
                  ON d_nem.session_id = d_player.session_id
                 AND d_nem.position = d_player.position - 1
              INNER JOIN sessions s ON s.id = d_player.session_id
-             WHERE d_player.is_player = 1
+             WHERE d_player.is_self = 1
                AND d_player.position IS NOT NULL AND d_player.position > 1
                AND s.session_type LIKE '%Race%'
-               AND d_nem.is_player = 0
+               AND d_nem.is_self = 0
                AND d_nem.name IS NOT NULL AND d_nem.name != ''
              GROUP BY d_nem.name ORDER BY cnt DESC LIMIT 1",
             [],
@@ -1047,7 +1049,7 @@ fn query_fun_facts(conn: &Connection) -> Result<(Vec<String>, Option<String>)> {
                  WHERE lap_num <= 2 AND position IS NOT NULL AND position > 0
                  GROUP BY driver_id
              ) fl ON fl.driver_id = d.id
-             WHERE d.is_player = 1
+             WHERE d.is_self = 1
                AND s.session_type LIKE '%Race%'
                AND d.position IS NOT NULL AND d.position > 0
                AND fl.position IS NOT NULL
@@ -1071,7 +1073,7 @@ fn query_fun_facts(conn: &Connection) -> Result<(Vec<String>, Option<String>)> {
              INNER JOIN (
                  SELECT session_id, COUNT(*) AS driver_count FROM drivers GROUP BY session_id
              ) dc ON dc.session_id = d.session_id
-             WHERE d.is_player = 1
+             WHERE d.is_self = 1
                AND d.position IS NOT NULL
                AND CAST(d.position AS REAL) > CAST(dc.driver_count AS REAL) / 2.0",
             [],
@@ -1089,7 +1091,7 @@ fn query_fun_facts(conn: &Connection) -> Result<(Vec<String>, Option<String>)> {
         .query_row(
             "SELECT d.car_type, COUNT(*) as wins FROM drivers d
              INNER JOIN sessions s ON s.id = d.session_id
-             WHERE d.is_player = 1 AND d.position = 1
+             WHERE d.is_self = 1 AND d.position = 1
                AND s.session_type LIKE '%Race%'
                AND d.car_type IS NOT NULL AND d.car_type != ''
              GROUP BY d.car_type ORDER BY wins DESC LIMIT 1",
@@ -1107,7 +1109,7 @@ fn query_fun_facts(conn: &Connection) -> Result<(Vec<String>, Option<String>)> {
     let class_count: i64 = conn
         .query_row(
             "SELECT COUNT(DISTINCT car_class) FROM drivers
-             WHERE is_player = 1 AND car_class IS NOT NULL AND car_class != ''",
+             WHERE is_self = 1 AND car_class IS NOT NULL AND car_class != ''",
             [],
             |r| r.get(0),
         )
@@ -1131,7 +1133,7 @@ fn query_fun_facts(conn: &Connection) -> Result<(Vec<String>, Option<String>)> {
     // Total player laps (sum of total_laps from player driver records)
     let player_lap_count: i64 = conn
         .query_row(
-            "SELECT COALESCE(SUM(total_laps), 0) FROM drivers WHERE is_player = 1",
+            "SELECT COALESCE(SUM(total_laps), 0) FROM drivers WHERE is_self = 1",
             [],
             |r| r.get(0),
         )
@@ -1170,7 +1172,7 @@ fn query_fun_facts(conn: &Connection) -> Result<(Vec<String>, Option<String>)> {
                  COUNT(*)
              FROM drivers d
              INNER JOIN sessions s ON s.id = d.session_id
-             WHERE d.is_player = 1
+             WHERE d.is_self = 1
                AND s.session_type LIKE '%Race%'
                AND d.position IS NOT NULL",
             [],
@@ -1194,7 +1196,7 @@ fn compute_clean_streak(conn: &Connection) -> Result<i64> {
     let mut driver_stmt = conn.prepare(
         "SELECT d.id, d.session_id FROM drivers d
          INNER JOIN sessions s ON s.id = d.session_id
-         WHERE d.is_player = 1
+         WHERE d.is_self = 1
          ORDER BY s.date_time ASC, d.id ASC",
     )?;
     let player_drivers: Vec<(i64, i64)> = driver_stmt
@@ -1259,7 +1261,7 @@ fn compute_improvement_trend(conn: &Connection) -> Option<String> {
         .query_row(
             "SELECT s.track_venue FROM drivers d
              INNER JOIN sessions s ON s.id = d.session_id
-             WHERE d.is_player = 1
+             WHERE d.is_self = 1
                AND d.best_lap_time IS NOT NULL AND d.best_lap_time > 0
                AND s.track_venue IS NOT NULL
              GROUP BY s.track_venue
@@ -1274,7 +1276,7 @@ fn compute_improvement_trend(conn: &Connection) -> Option<String> {
         .prepare(
             "SELECT d.best_lap_time FROM drivers d
              INNER JOIN sessions s ON s.id = d.session_id
-             WHERE d.is_player = 1 AND s.track_venue = ?1
+             WHERE d.is_self = 1 AND s.track_venue = ?1
                AND d.best_lap_time IS NOT NULL AND d.best_lap_time > 0
              ORDER BY s.date_time ASC",
         )
@@ -1312,7 +1314,7 @@ fn compute_time_of_day_fact(conn: &Connection) -> Option<String> {
         .prepare(
             "SELECT s.date_time FROM sessions s
              INNER JOIN drivers d ON d.session_id = s.id
-             WHERE d.is_player = 1 AND s.date_time IS NOT NULL",
+             WHERE d.is_self = 1 AND s.date_time IS NOT NULL",
         )
         .ok()?;
 
