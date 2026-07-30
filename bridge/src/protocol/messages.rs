@@ -252,14 +252,23 @@ pub enum ServerMessage {
         individual_phase: u8,   // mIndividualPhase: 10=under yellow, 11=under blue (unused)
         player_under_yellow: bool, // mUnderYellow for player vehicle (FCY only)
         player_sector: i32,     // player's current sector: 1=S1, 2=S2, 0=S3, -1=unknown
-        safety_car_active: bool, // safety car currently deployed
-        safety_car_exists: bool, // safety car configured for this session
+        /// Field under caution. Derived from `mGamePhase == 6` (full course
+        /// yellow) since the port to `LMU_Data`, which has no safety-car
+        /// record; the plugin's Rules buffer used to supply it directly.
+        safety_car_active: bool,
     },
 
-    /// Event-based
+    /// Event-based. Re-broadcast whenever `telemetry_valid` flips, not only on
+    /// game connect/disconnect.
     ConnectionStatus {
         game_connected: bool,
         plugin_version: String,
+        /// `false` when the wheel block failed its plausibility check — the
+        /// shared-memory layout no longer matches what we parse, so tire and
+        /// brake readings must not be trusted.
+        telemetry_valid: bool,
+        /// Human-readable reason, present only when `telemetry_valid` is false.
+        telemetry_warning: Option<String>,
     },
 
     /// All-drivers lap snapshot — sent when any car crosses the S/F line,

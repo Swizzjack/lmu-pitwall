@@ -14,44 +14,25 @@ http://<racing-pc-ip>:9000
 
 No configuration required. A portable `lmu-pitwall.exe` (no installer) is also on the releases page.
 
-## Shared Memory Plugin (Required)
+## Shared Memory (no plugin required)
 
-LMU Pitwall reads telemetry via the [rF2 Shared Memory Map Plugin](https://github.com/TheIronWolfModding/rF2SharedMemoryMapPlugin) by TheIronWolf. This plugin is not bundled with LMU and must be installed once.
+LMU Pitwall reads Le Mans Ultimate's own `LMU_Data` shared memory, which the
+game publishes itself. There is nothing to download and nothing to keep in step
+with game updates.
 
-**Step 1 — Install the DLL**
+**The only setting:** Settings → Gameplay → Enable Plugins → **ON**, then
+restart LMU. The switch also governs the game's built-in shared memory, and it
+only takes effect after a full restart. This is required even with no plugin
+installed — verified: with the switch off, LMU publishes no `LMU_Data` mapping
+and Pitwall stays on *Waiting for Le Mans Ultimate*. If the dashboard never
+connects while the game is running, that switch is the first thing to check.
 
-Download `rFactor2SharedMemoryMapPlugin64.dll` from the plugin's latest release and place it at:
-
-```
-Le Mans Ultimate\Plugins\rFactor2SharedMemoryMapPlugin64.dll
-```
-
-**Step 2 — Enable in `CustomPluginVariables.JSON`**
-
-Open or create `Le Mans Ultimate\UserData\player\CustomPluginVariables.JSON` and add:
-
-```json
-{
-  "rFactor2SharedMemoryMapPlugin64.dll": {
-    " Enabled": 1,
-    "DebugISIInternals": 0,
-    "DebugOutputLevel": 0,
-    "DebugOutputSource": 0,
-    "DedicatedServerMapGlobally": 0,
-    "EnableDirectMemoryAccess": 0,
-    "EnableHWControlInput": 0,
-    "EnableRulesControlInput": 0,
-    "EnableWeatherControlInput": 0,
-    "UnsubscribedBuffersMask": 0
-  }
-}
-```
-
-> The leading space in `" Enabled"` is required by the rF2 plugin engine.
-
-**Step 3 — Activate in-game**
-
-Settings → Gameplay → Enable Plugins → ON, then restart LMU. Plugins only take effect after a full restart.
+> **Upgrading from an older LMU Pitwall?** The
+> [rF2 Shared Memory Map Plugin](https://github.com/TheIronWolfModding/rF2SharedMemoryMapPlugin)
+> is no longer used. You can delete
+> `Le Mans Ultimate\Plugins\rFactor2SharedMemoryMapPlugin64.dll` and its entry
+> in `UserData\player\CustomPluginVariables.JSON`. Leaving them in place does
+> no harm — Pitwall simply ignores those buffers now.
 
 ## Usage
 
@@ -87,7 +68,7 @@ Widget layout is drag-and-drop; positions and sizes are saved automatically.
 
 ```
 Le Mans Ultimate (Windows)
-├── rF2 Shared Memory  (~60 Hz telemetry)
+├── LMU_Data shared memory  (100 Hz telemetry, 5 Hz scoring)
 └── REST API  :6397
     ├── GET /rest/strategy/usage                        (Virtual Energy history)
     └── GET /rest/garage/UIScreen/RepairAndRefuel       (wearables: aero, brakes, suspension)
@@ -166,7 +147,7 @@ After that, `release.sh` automatically builds both the standalone `.exe` and the
 | Cross-compilation | `cargo-zigbuild` — Windows `.exe` from Linux, no MinGW required |
 | Static embedding | `rust-embed` — React bundle baked into the binary |
 | Installer | Inno Setup 6 via Wine |
-| LMU data sources | rF2 Shared Memory (~60 Hz) + LMU REST API port 6397 |
+| LMU data sources | `LMU_Data` shared memory (100 Hz telemetry / 5 Hz scoring) + LMU REST API port 6397 |
 
 ## Design
 

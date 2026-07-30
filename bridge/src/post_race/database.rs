@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS sessions (
     race_laps       INTEGER,
     fuel_mult       REAL,
     tire_mult       REAL,
+    setting         TEXT,
     imported_at     TEXT    DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -40,7 +41,12 @@ CREATE TABLE IF NOT EXISTS drivers (
     car_class       TEXT,
     car_number      INTEGER,
     team_name       TEXT,
+    -- Verbatim from the XML: 1 = human, 0 = AI. Offline that singles out the
+    -- local player; online every human carries it. Never rewritten on import.
     is_player       BOOLEAN NOT NULL DEFAULT 0,
+    -- Which of those humans is *us*. Derived, not imported — see
+    -- `importer::resolve_local_player`.
+    is_self         BOOLEAN NOT NULL DEFAULT 0,
     position        INTEGER,
     class_position  INTEGER,
     best_lap_time   REAL,
@@ -104,6 +110,48 @@ CREATE TABLE IF NOT EXISTS events (
 CREATE INDEX IF NOT EXISTS idx_events_session_id   ON events(session_id);
 CREATE INDEX IF NOT EXISTS idx_events_session_type ON events(session_id, event_type);
 CREATE INDEX IF NOT EXISTS idx_events_driver_name  ON events(driver_name);
+
+-- Per-lap fuel / virtual energy / tire wear captured live from LMU_Data while
+-- driving. Online result XMLs carry none of these attributes (see
+-- `importer::backfill_live_laps`), so this is the only source for them in
+-- multiplayer. Offline the XML stays authoritative and the backfill is a no-op.
+--
+-- Units match the XML attributes exactly so the two sources are interchangeable
+-- downstream: fuel_level/ve_level are fractions of a full tank / full VE
+-- (0.0-1.0), tw_* is *remaining* tread (1.0 = new), matching LMU's mWear.
+CREATE TABLE IF NOT EXISTS live_laps (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_key     TEXT    NOT NULL,
+    recorded_at     INTEGER NOT NULL,
+    track_name      TEXT,
+    session_type    TEXT,
+    player_name     TEXT    NOT NULL,
+    car_class       TEXT,
+    lap_num         INTEGER NOT NULL,
+    lap_time        REAL,
+    fuel_level      REAL,
+    fuel_used       REAL,
+    ve_level        REAL,
+    ve_used         REAL,
+    tw_fl           REAL,
+    tw_fr           REAL,
+    tw_rl           REAL,
+    tw_rr           REAL,
+    UNIQUE(session_key, lap_num)
+);
+
+CREATE INDEX IF NOT EXISTS idx_live_laps_match ON live_laps(player_name, lap_num);
+
+-- Names the local player has raced under. Needed because a multiplayer result
+-- XML marks every human as isPlayer=1, so the name is the only way to tell
+-- which of them is us. Filled from shared memory while driving, and derived
+-- from offline results (where isPlayer=1 is unambiguous) on import.
+CREATE TABLE IF NOT EXISTS player_identity (
+    name            TEXT    PRIMARY KEY,
+    source          TEXT    NOT NULL,
+    seen_count      INTEGER NOT NULL DEFAULT 1,
+    last_seen       INTEGER
+);
 ";
 
 // ---------------------------------------------------------------------------
@@ -129,6 +177,18 @@ impl PostRaceDb {
         conn.execute("ALTER TABLE laps ADD COLUMN ve_level REAL", []).ok();
         conn.execute("ALTER TABLE laps ADD COLUMN ve_used REAL", []).ok();
         conn.execute("ALTER TABLE drivers ADD COLUMN finish_time REAL", []).ok();
+        conn.execute("ALTER TABLE sessions ADD COLUMN setting TEXT", []).ok();
+        // Seeded from is_player so offline history is correct the moment the
+        // column appears; the resolver then sorts out the multiplayer sessions.
+        if conn
+            .execute(
+                "ALTER TABLE drivers ADD COLUMN is_self BOOLEAN NOT NULL DEFAULT 0",
+                [],
+            )
+            .is_ok()
+        {
+            conn.execute("UPDATE drivers SET is_self = is_player", []).ok();
+        }
         Ok(Self {
             conn: Mutex::new(conn),
         })

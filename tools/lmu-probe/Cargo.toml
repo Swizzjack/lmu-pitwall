@@ -1,0 +1,20 @@
+[package]
+name = "lmu-probe"
+version = "0.1.0"
+edition = "2021"
+description = "Throwaway diagnostic: compare LMU's built-in LMU_Data shared memory against the rF2SharedMemoryMapPlugin buffers"
+publish = false
+
+[[bin]]
+name = "lmu-probe"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 1
+strip = true
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows-sys = { version = "0.59", features = [
+    "Win32_System_Memory",
+    "Win32_Foundation",
+] }

@@ -31,6 +31,7 @@ impl Rule for TireTempsOutOfRangeRule {
     fn frequency_mask(&self) -> FrequencyMask { FrequencyMask::HIGH }
 
     fn evaluate(&self, current: &EngineerState, _prev: Option<&EngineerState>) -> Option<RuleEvent> {
+        if !current.tire_data_valid { return None; }
         let temps = &current.tire_temps_c;
         if temps.iter().all(|&t| t < 1.0) { return None; }
 
@@ -62,6 +63,7 @@ impl Rule for TireTempsInRangeRule {
     fn frequency_mask(&self) -> FrequencyMask { FrequencyMask::HIGH }
 
     fn evaluate(&self, current: &EngineerState, prev: Option<&EngineerState>) -> Option<RuleEvent> {
+        if !current.tire_data_valid { return None; }
         let temps = &current.tire_temps_c;
         // Need valid temp readings
         if temps.iter().all(|&t| t < 1.0) { return None; }
@@ -88,6 +90,7 @@ impl Rule for TireWear50Rule {
     fn frequency_mask(&self) -> FrequencyMask { FrequencyMask::MEDIUM_AND_UP }
 
     fn evaluate(&self, current: &EngineerState, prev: Option<&EngineerState>) -> Option<RuleEvent> {
+        if !current.tire_data_valid { return None; }
         let prev = prev?;
         let now = max_wear(&current.tire_wear_pct);
         let was = max_wear(&prev.tire_wear_pct);
@@ -113,6 +116,7 @@ impl Rule for TireWear75Rule {
     fn frequency_mask(&self) -> FrequencyMask { FrequencyMask::ALL }
 
     fn evaluate(&self, current: &EngineerState, prev: Option<&EngineerState>) -> Option<RuleEvent> {
+        if !current.tire_data_valid { return None; }
         let prev = prev?;
         let now = max_wear(&current.tire_wear_pct);
         let was = max_wear(&prev.tire_wear_pct);
@@ -137,6 +141,7 @@ impl Rule for TireWear90Rule {
     fn frequency_mask(&self) -> FrequencyMask { FrequencyMask::ALL }
 
     fn evaluate(&self, current: &EngineerState, prev: Option<&EngineerState>) -> Option<RuleEvent> {
+        if !current.tire_data_valid { return None; }
         let prev = prev?;
         let now = max_wear(&current.tire_wear_pct);
         let was = max_wear(&prev.tire_wear_pct);

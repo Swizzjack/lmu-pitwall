@@ -234,13 +234,16 @@ export interface VehicleStatusUpdate {
   player_under_yellow: boolean   // mUnderYellow: FCY only (crossed S/F under FCY)
   player_sector: number          // 1=S1, 2=S2, 0=S3, -1=unknown
   safety_car_active: boolean
-  safety_car_exists: boolean
 }
 
 export interface ConnectionStatus {
   type: 'ConnectionStatus'
   game_connected: boolean
   plugin_version: string
+  // false when the shared-memory layout no longer matches what the bridge
+  // parses — tire and brake readings are unreliable in that case
+  telemetry_valid: boolean
+  telemetry_warning: string | null
 }
 
 export interface VersionInfo {

@@ -8,10 +8,8 @@
 use std::collections::HashMap;
 
 use crate::protocol::messages::{DriverLapSnapshot, ServerMessage, WheelSnapshot};
-use crate::shared_memory::types::{
-    bytes_to_str, rF2ScoringBuffer, rF2ScoringInfo, rF2TelemetryBuffer, rF2VehicleScoring,
-    MAX_MAPPED_VEHICLES,
-};
+use crate::shared_memory::reader::{ScoringFrame, TelemetryFrame};
+use crate::shared_memory::types::{bytes_to_str, rF2ScoringInfo, rF2VehicleScoring};
 
 pub struct LapTracker {
     /// mID → total laps recorded on the previous scoring tick.
@@ -37,8 +35,8 @@ impl LapTracker {
     /// Call `build_message()` after this to get the updated `AllDriversUpdate`.
     pub fn process(
         &mut self,
-        sc: &rF2ScoringBuffer,
-        tel: Option<&rF2TelemetryBuffer>,
+        sc: &ScoringFrame,
+        tel: Option<&TelemetryFrame>,
     ) -> bool {
         let info = &sc.mScoringInfo;
 
@@ -53,11 +51,10 @@ impl LapTracker {
             self.session_key = session_key;
         }
 
-        let num_sc = (info.mNumVehicles as usize).min(MAX_MAPPED_VEHICLES);
         let mut any_new = false;
 
-        for i in 0..num_sc {
-            let v = &sc.mVehicles[i];
+        // mVehicles is already trimmed to the occupied slots by the reader.
+        for v in sc.mVehicles.iter() {
             let id = v.mID;
             let total_laps = v.mTotalLaps as i32;
 
@@ -97,8 +94,7 @@ impl LapTracker {
                     // Compound names and dent severity come from the telemetry buffer  (all vehicles).
                     // Update and broadcast when they change (e.g. after a pit stop / collision).
                     if let Some(t) = tel {
-                        let tel_num = (t.mNumVehicles as usize).min(MAX_MAPPED_VEHICLES);
-                        if let Some(tv) = t.mVehicles[..tel_num].iter().find(|tv| tv.mID == id) {
+                        if let Some(tv) = t.mVehicles.iter().find(|tv| tv.mID == id) {
                             let front = bytes_to_str(&tv.mFrontTireCompoundName).to_string();
                             let rear  = bytes_to_str(&tv.mRearTireCompoundName).to_string();
                             if (!front.is_empty() || !rear.is_empty())
@@ -157,7 +153,7 @@ impl LapTracker {
 
 fn build_snapshot(
     v: &rF2VehicleScoring,
-    tel: Option<&rF2TelemetryBuffer>,
+    tel: Option<&TelemetryFrame>,
     _info: &rF2ScoringInfo,
 ) -> DriverLapSnapshot {
     let last_sector3 = if v.mLastLapTime > 0.0 && v.mLastSector2 > 0.0 {
@@ -167,10 +163,7 @@ fn build_snapshot(
     };
 
     // Find this vehicle's slot in the telemetry buffer (linear search by mID).
-    let tel_veh = tel.and_then(|t| {
-        let num = (t.mNumVehicles as usize).min(MAX_MAPPED_VEHICLES);
-        t.mVehicles[..num].iter().find(|tv| tv.mID == v.mID)
-    });
+    let tel_veh = tel.and_then(|t| t.mVehicles.iter().find(|tv| tv.mID == v.mID));
 
     let lv = tel_veh.map(|tv| tv.mLocalVel);
     let speed_ms = lv

@@ -295,13 +295,18 @@ function normalizeSessionType(raw: string): string {
 
 // ── Visual components ──────────────────────────────────────────────────────────
 
-function TireWearNumeric({ tires }: { tires: [number, number, number, number] }) {
+// A lap whose XML carries no twfl/twfr/twrl/twrr attributes has *unknown* tire
+// wear, not full tread. Defaulting the missing value to 1 used to render it as
+// a confident "100%", which is indistinguishable from a genuinely fresh set —
+// the one reading that must never be invented. Sessions whose results XML omits
+// the attributes (observed on an online practice server) now show "–".
+function TireWearNumeric({ tires }: { tires: [number | null, number | null, number | null, number | null] }) {
   const [fl, fr, rl, rr] = tires
-  const cell = (label: string, w: number): React.ReactNode => (
+  const cell = (label: string, w: number | null): React.ReactNode => (
     <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 1 }}>
       <span style={{ fontSize: 11, color: '#555', fontFamily: 'monospace', lineHeight: 1 }}>{label}</span>
-      <span style={{ fontSize: 13, fontWeight: 700, color: wearColor(w), fontFamily: 'monospace', lineHeight: 1 }}>
-        {Math.round(w * 100)}%
+      <span style={{ fontSize: 13, fontWeight: 700, color: w === null ? '#555' : wearColor(w), fontFamily: 'monospace', lineHeight: 1 }}>
+        {w === null ? '–' : `${Math.round(w * 100)}%`}
       </span>
     </div>
   )
@@ -438,10 +443,10 @@ const ServerLapDetail = memo(function ServerLapDetail({
             const timeColor = isOBest ? '#c026d3' : isPBest ? '#22c55e' : colors.text
             const rowBg = lap.is_pit ? '#1b1a10' : idx % 2 === 0 ? '#111' : '#0e0e0e'
 
-            const twfl = lap.tw_fl ?? 1
-            const twfr = lap.tw_fr ?? 1
-            const twrl = lap.tw_rl ?? 1
-            const twrr = lap.tw_rr ?? 1
+            const twfl = lap.tw_fl
+            const twfr = lap.tw_fr
+            const twrl = lap.tw_rl
+            const twrr = lap.tw_rr
             const fcompound = parseCompound(lap.compound_fl)
             const fuelPct = lap.fuel_level !== null ? Math.round(lap.fuel_level * 100) : null
             const vePct = lap.ve_level !== null ? Math.round(lap.ve_level * 100) : null

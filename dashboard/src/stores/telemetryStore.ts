@@ -105,6 +105,8 @@ interface ConnectionSection {
   status: ConnectionStatus
   game_connected: boolean
   plugin_version: string
+  telemetry_valid: boolean
+  telemetry_warning: string | null
 }
 
 type VersionInfoSection = Omit<VersionInfo, 'type'> | null
@@ -244,13 +246,14 @@ const defaultVehicleStatus: VehicleStatusSection = {
   player_under_yellow: false,
   player_sector: -1,
   safety_car_active: false,
-  safety_car_exists: false,
 }
 
 const defaultConnection: ConnectionSection = {
   status: 'disconnected',
   game_connected: false,
   plugin_version: '',
+  telemetry_valid: true,
+  telemetry_warning: null,
 }
 
 const defaultAllDrivers: AllDriversSection = {
@@ -469,7 +472,6 @@ export const useTelemetryStore = create<TelemetryStore>((set) => ({
             player_under_yellow:   msg.player_under_yellow,
             player_sector:         msg.player_sector,
             safety_car_active:     msg.safety_car_active,
-            safety_car_exists:     msg.safety_car_exists,
           },
         })
         break
@@ -480,6 +482,8 @@ export const useTelemetryStore = create<TelemetryStore>((set) => ({
             ...state.connection,
             game_connected: msg.game_connected,
             plugin_version: msg.plugin_version,
+            telemetry_valid: msg.telemetry_valid,
+            telemetry_warning: msg.telemetry_warning,
           },
         }))
         break
