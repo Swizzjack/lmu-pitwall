@@ -121,6 +121,30 @@ bridge to `LMU_Data` changes no number the dashboard shows. It is not needed for
 the proof — section 4 does that job single-handedly — but it is the cheapest
 possible answer to "will anything look different afterwards".
 
+**Run C — online, with a full field. Answers a different question.**
+Section 9 looks at the telemetry rows of the cars we are *not* driving. It
+exists because online result XMLs carry no fuel, virtual energy or tire wear for
+anyone (`ClientFuelVisible`), which leaves live capture as the only source — and
+the standings widget already proves `mVirtualEnergy` arrives for the whole grid.
+Whether `mFuel` and `mWear` do as well decides whether per-lap consumption can be
+tracked for every driver or only for us.
+
+The section follows the opponent it saw in the most snapshots, so its range and
+"changed" column describe a single car that actually stayed, and counts alongside
+it how many cars ever carried a non-zero value. `mElapsedTime` and `mLapNumber`
+are the controls: if they do not move, the row is a placeholder and nothing else
+in it is worth reading. Run it both online and against AI — the game has no
+reason to publish the same things in both.
+
+The coverage figure next to the followed car is part of the result, not
+decoration. An **online practice session is the wrong place for this run**:
+drivers join and leave constantly, and a car that is only in the buffer for a few
+seconds reports every field as unchanged for want of data, not because the game
+holds it still. Measured on 2026-07-30 at Sebring, the first-seen car left after
+7 s of a 276 s run and the whole section had to be discarded. The probe now warns
+below 50% coverage. Use a **race**, or an offline session against AI, where the
+field is fixed for the duration.
+
 ## The known gap: safety car
 
 `mSafetyCarActive` / `mSafetyCarExists` live in the plugin's Rules buffer and

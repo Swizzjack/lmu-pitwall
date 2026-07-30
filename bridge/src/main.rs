@@ -528,7 +528,10 @@ async fn task_polling(
     // Player name for strategy/usage lookup (extracted from scoring).
     let mut last_player_name = String::new();
 
-    info!("Waiting for Le Mans Ultimate...");
+    // With *Settings → Gameplay → Enable Plugins* off, LMU publishes no
+    // LMU_Data mapping at all (measured 2026-07-30) — indistinguishable here
+    // from the game not running, so say both.
+    info!("Waiting for Le Mans Ultimate... (needs Settings → Gameplay → Enable Plugins = ON, then a game restart)");
 
     loop {
         tokio::select! {

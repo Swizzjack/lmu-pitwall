@@ -117,6 +117,27 @@ pub const XFIELDS: &[XField] = &[
     XField { name: "mVirtualEnergy", get: |v| v.mVirtualEnergy as f64 },
 ];
 
+/// The same accessors, pointed at the cars we are *not* driving.
+///
+/// LMU_Data reserves a telemetry row per car, and the standings widget proves
+/// at least `mVirtualEnergy` is filled for all of them. Whether fuel and tire
+/// wear are too decides something concrete: online result XMLs carry neither
+/// for anybody, so if these rows are real, a whole field's stint data is
+/// there for the taking — and if they are flat zero, only our own car is.
+///
+/// `mElapsedTime` and `mLapNumber` are the controls: they must move for a car
+/// that is driving, and if they do not, the row is a placeholder and nothing
+/// else in it means anything.
+pub const OPPONENT_FIELDS: &[XField] = &[
+    XField { name: "mElapsedTime", get: |v| v.mElapsedTime },
+    XField { name: "mLapNumber", get: |v| v.mLapNumber as f64 },
+    XField { name: "mVirtualEnergy", get: |v| v.mVirtualEnergy as f64 },
+    XField { name: "mFuel", get: |v| v.mFuel },
+    XField { name: "mFuelCapacity", get: |v| v.mFuelCapacity },
+    XField { name: "FL mWear", get: |v| { let w = v.mWheels; w[0].mWear } },
+    XField { name: "RR mWear", get: |v| { let w = v.mWheels; w[3].mWear } },
+];
+
 #[derive(Default)]
 pub struct Stat {
     pub present: u64,

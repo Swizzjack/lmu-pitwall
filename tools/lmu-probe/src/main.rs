@@ -376,6 +376,20 @@ mod imp {
         // Cross-check against the plugin, when it is installed: (samples, max |delta|).
         let mut xstats: Vec<(u64, f64)> = vec![(0, 0.0); XFIELDS.len()];
 
+        // The other cars. Stats are kept per car and the report follows the one
+        // present in the most snapshots, so its min/max/changes describe a car
+        // that actually stayed for the run rather than a blur of the field. The
+        // first car seen is the wrong choice: online, cars join and leave, and a
+        // focus that vanishes after seven seconds reads as "nothing ever
+        // changed" for reasons that have nothing to do with the game's writes.
+        // The ID sets alongside answer the broader question of how many cars
+        // carry each value at all.
+        let mut opp_stats: std::collections::BTreeMap<i32, Vec<Stat>> = Default::default();
+        let mut opp_cars_with_data: Vec<std::collections::BTreeSet<i32>> =
+            vec![Default::default(); OPPONENT_FIELDS.len()];
+        let mut opp_ids: std::collections::BTreeSet<i32> = Default::default();
+        let mut opp_names: std::collections::BTreeMap<i32, String> = Default::default();
+
         let mut game_version = 0i32;
         let mut track = String::new();
         let mut session_type = -1i32;
@@ -479,6 +493,40 @@ mod imp {
                 if let (Some(a), Some(b)) = (vs, vt) {
                     if a.mID != b.mID {
                         id_mismatch += 1;
+                    }
+                }
+
+                // -- the other cars, from the same copy --
+                {
+                    let nt = num_telem.clamp(0, MAX_MAPPED_VEHICLES as i32) as usize;
+                    let vt_base =
+                        std::ptr::addr_of!(snap.telemetry.telemInfo) as *const rF2VehicleTelemetry;
+                    for i in 0..nt {
+                        let v: rF2VehicleTelemetry = unsafe { elem(vt_base, i) };
+                        if Some(v.mID) == vt.map(|p| p.mID) {
+                            continue;
+                        }
+                        opp_ids.insert(v.mID);
+                        opp_names.entry(v.mID).or_insert_with(|| {
+                            (0..n)
+                                .map(|j| unsafe { elem(vs_base, j) })
+                                .find(|s| s.mID == v.mID)
+                                .map(|s| bytes_to_str(&s.mDriverName).to_string())
+                                .unwrap_or_default()
+                        });
+                        let car = opp_stats.entry(v.mID).or_insert_with(|| {
+                            (0..OPPONENT_FIELDS.len()).map(|_| Stat::default()).collect()
+                        });
+                        for (k, f) in OPPONENT_FIELDS.iter().enumerate() {
+                            let val = (f.get)(&v);
+                            if val != 0.0 {
+                                opp_cars_with_data[k].insert(v.mID);
+                            }
+                            // No plausibility window here: the question is what
+                            // the game writes, not whether it matches an
+                            // expectation we do not yet have.
+                            car[k].record(val, f64::NEG_INFINITY, f64::INFINITY);
+                        }
                     }
                 }
 
@@ -792,6 +840,74 @@ mod imp {
             say!(rep, "  bridge to LMU_Data changes no number the dashboard shows. Small");
             say!(rep, "  non-zero deltas on fast-moving fields (RPM, mElapsedTime) are the");
             say!(rep, "  sampling skew between the two reads, not a decoding difference.");
+        }
+        say!(rep);
+
+        // -- opponents --
+        say!(rep, "--- 9. The other cars: is their telemetry row real? ---");
+        say!(rep);
+        if opp_ids.is_empty() {
+            say!(rep, "  No other car was in the telemetry buffer during this run. Repeat in");
+            say!(rep, "  a session with opponents — this section needs company to say anything.");
+        } else {
+            let cars = opp_ids.len();
+            // The car with the most snapshots — the longest look at one row we
+            // got. A short look proves nothing about what changes.
+            let focus = opp_stats
+                .iter()
+                .max_by_key(|(_, s)| s[0].present)
+                .map(|(id, _)| *id)
+                .unwrap_or(-1);
+            let focus_stats = &opp_stats[&focus];
+            let seen = focus_stats[0].present;
+            let coverage = if snapshots > 0 {
+                seen as f64 * 100.0 / snapshots as f64
+            } else {
+                0.0
+            };
+            say!(rep, "  Opponents in the telemetry buffer: {cars}");
+            say!(
+                rep,
+                "  Followed longest:                  mID {} {:?} — {seen}/{snapshots} snapshots ({coverage:.0}%)",
+                focus,
+                opp_names.get(&focus).cloned().unwrap_or_default()
+            );
+            say!(rep);
+            say!(
+                rep,
+                "  {:<18} {:<26} {:<9} {}",
+                "field",
+                "range on that one car",
+                "changed",
+                "cars ever non-zero"
+            );
+            for (i, f) in OPPONENT_FIELDS.iter().enumerate() {
+                let s = &focus_stats[i];
+                say!(
+                    rep,
+                    "  {:<18} {:>11.3} … {:<11.3}  {:<9} {}/{}",
+                    f.name,
+                    s.min,
+                    s.max,
+                    yes_no(s.changes > 0),
+                    opp_cars_with_data[i].len(),
+                    cars
+                );
+            }
+            say!(rep);
+            if coverage < 50.0 {
+                say!(rep, "  WARNING: that car was only in the buffer for {coverage:.0}% of the run,");
+                say!(rep, "  so \"changed NO\" below may only mean there was not enough of it to");
+                say!(rep, "  see a change. Repeat in a session where the field stays put.");
+                say!(rep);
+            }
+            say!(rep, "  Read it as: mElapsedTime and mLapNumber moving proves the row belongs");
+            say!(rep, "  to a car that is actually driving. Only then does the rest mean");
+            say!(rep, "  anything — a value that is non-zero on many cars and changes over the");
+            say!(rep, "  run is published per car; one that is flat zero on all of them is");
+            say!(rep, "  ours alone, and no amount of tracking will produce it for the field.");
+            say!(rep, "  mFuel is litres, so it only reads meaningfully next to mFuelCapacity.");
+            say!(rep, "  Run this both online and against AI: the two need not agree.");
         }
         say!(rep);
 

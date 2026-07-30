@@ -47,3 +47,6 @@ config.json
 AGENTS.md
 .pi/
 .claude.json
+
+# Real LMU result XMLs used for testing — they carry real drivers' names.
+/*.xml

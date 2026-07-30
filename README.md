@@ -22,7 +22,10 @@ with game updates.
 
 **The only setting:** Settings → Gameplay → Enable Plugins → **ON**, then
 restart LMU. The switch also governs the game's built-in shared memory, and it
-only takes effect after a full restart.
+only takes effect after a full restart. This is required even with no plugin
+installed — verified: with the switch off, LMU publishes no `LMU_Data` mapping
+and Pitwall stays on *Waiting for Le Mans Ultimate*. If the dashboard never
+connects while the game is running, that switch is the first thing to check.
 
 > **Upgrading from an older LMU Pitwall?** The
 > [rF2 Shared Memory Map Plugin](https://github.com/TheIronWolfModding/rF2SharedMemoryMapPlugin)
@@ -65,7 +68,7 @@ Widget layout is drag-and-drop; positions and sizes are saved automatically.
 
 ```
 Le Mans Ultimate (Windows)
-├── rF2 Shared Memory  (~60 Hz telemetry)
+├── LMU_Data shared memory  (100 Hz telemetry, 5 Hz scoring)
 └── REST API  :6397
     ├── GET /rest/strategy/usage                        (Virtual Energy history)
     └── GET /rest/garage/UIScreen/RepairAndRefuel       (wearables: aero, brakes, suspension)
@@ -144,7 +147,7 @@ After that, `release.sh` automatically builds both the standalone `.exe` and the
 | Cross-compilation | `cargo-zigbuild` — Windows `.exe` from Linux, no MinGW required |
 | Static embedding | `rust-embed` — React bundle baked into the binary |
 | Installer | Inno Setup 6 via Wine |
-| LMU data sources | rF2 Shared Memory (~60 Hz) + LMU REST API port 6397 |
+| LMU data sources | `LMU_Data` shared memory (100 Hz telemetry / 5 Hz scoring) + LMU REST API port 6397 |
 
 ## Design
 
