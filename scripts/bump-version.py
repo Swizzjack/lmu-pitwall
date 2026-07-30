@@ -6,6 +6,7 @@ Files updated:
   - VERSION                              (single source of truth)
   - installer/lmu-pitwall-installer.iss  (#define MyAppVersion)
   - bridge/Cargo.toml                    (version = "...")
+  - bridge/Cargo.lock                    (the lmu-pitwall package entry)
   - dashboard/package.json               ("version": "...")
   - dashboard/package-lock.json          (top-level + packages[""] entries)
 
@@ -57,6 +58,32 @@ def update_cargo_toml(new_version: str):
         count=1,
         flags=re.MULTILINE,
     )
+    path.write_text(content)
+
+def update_cargo_lock(new_version: str):
+    """Keep bridge/Cargo.lock in sync with bridge/Cargo.toml.
+
+    Cargo records the workspace crate's own version in the lockfile, so skipping
+    this leaves a dirty tree after every bump — and the next `cargo build`
+    rewrites it anyway, which is how it went unnoticed until 1.2.0. Only the
+    `lmu-pitwall` entry is touched; every dependency stays byte-identical.
+    """
+    path = ROOT / "bridge" / "Cargo.lock"
+    if not path.exists():
+        return
+    content, n = re.subn(
+        r'(\[\[package\]\]\nname = "lmu-pitwall"\nversion = ")([^"]+)(")',
+        f'\\g<1>{new_version}\\3',
+        path.read_text(),
+        count=1,
+    )
+    if not n:
+        print(
+            "ERROR: Cargo.lock has no [[package]] entry for lmu-pitwall — fix it "
+            "manually, then re-run.",
+            file=sys.stderr,
+        )
+        sys.exit(1)
     path.write_text(content)
 
 def update_package_json(new_version: str):
@@ -132,6 +159,7 @@ def main():
     write_version(new)
     update_iss(new)
     update_cargo_toml(new)
+    update_cargo_lock(new)
     update_package_json(new)
 
     print(f"Version bumped: {old} → {new}")
