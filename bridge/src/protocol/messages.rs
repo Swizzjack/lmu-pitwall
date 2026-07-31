@@ -130,8 +130,11 @@ pub struct VehicleScoring {
     // Derived sector 3 times (calculated: lap_time - sector2_cumulative)
     pub last_sector3: f64, // last S3 time; -1.0 if invalid
     pub best_sector3: f64, // best S3 time; -1.0 if invalid
-    // World position (from mPos — metres in rF2 world space)
+    // World position (from mPos — metres in rF2 world space). Read from the
+    // telemetry buffer when that carries this car, from scoring otherwise —
+    // see `position_of` in main.rs for why the two sources are not equivalent.
     pub pos_x: f64, // mPos.x — world X coordinate
+    pub pos_y: f64, // mPos.y — world Y coordinate (up axis in rF2), i.e. elevation
     pub pos_z: f64, // mPos.z — world Z coordinate (forward axis in rF2)
     // Race gap (seconds / laps behind leader)
     pub time_behind_leader: f64, // mTimeBehindLeader (s); 0.0 for leader

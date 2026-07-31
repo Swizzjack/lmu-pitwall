@@ -34,7 +34,7 @@ use lap_tracker::LapTracker;
 use protocol::messages::{ServerMessage, TireData, Vec3, VehicleScoring, WeatherData};
 use shared_memory::reader::SharedMemoryReader;
 use shared_memory::reader::{ScoringFrame, TelemetryFrame};
-use shared_memory::types::{bytes_to_str, WheelDataStatus};
+use shared_memory::types::{bytes_to_str, rF2Vec3, WheelDataStatus};
 
 static LAST_DELTA_LOG: AtomicU64 = AtomicU64::new(0);
 use websocket::server::WebSocketServer;
@@ -184,16 +184,58 @@ fn build_telemetry_update(
     })
 }
 
+/// Pick the world position to publish for one car.
+///
+/// `scoring` is what the car's scoring row says; `telemetry` is the same
+/// quantity out of the telemetry row for that slot ID, when there is one. They
+/// hold the same value from the same physics — the difference is how often it
+/// is rewritten. The scoring block ticks at 5 Hz, the telemetry rows at 100 Hz
+/// (both measured), so a position taken from scoring only ever moves in 200 ms
+/// steps no matter how fast we broadcast. That step is what the track map was
+/// animating, and it is why cars moved in visible jumps.
+///
+/// The telemetry row is preferred, but not trusted blindly. LMU is known to
+/// publish placeholder values in other cars' telemetry rows — `mFuel` sits at
+/// exactly half the tank and `mWear` at a flat 1.0 for everyone but us — so a
+/// row that exists is not proof that *this* field is live in it. Two ways it
+/// can fail here, both caught:
+///
+///  * an all-zero position, which is a slot the game has not filled in, and
+///  * a position far from the scoring one, which is a row not tracking this car.
+///
+/// Both fall back to scoring, i.e. to exactly what this function returned
+/// before the telemetry source existed. The 150 m threshold is well clear of
+/// legitimate disagreement: the two records come from the same coherent copy,
+/// so scoring is at most one 5 Hz tick behind, which even at 350 km/h is under
+/// 20 m.
+fn position_of(scoring: rF2Vec3, telemetry: Option<rF2Vec3>) -> (f64, f64, f64) {
+    const MAX_DISAGREEMENT_M: f64 = 150.0;
+
+    let (sx, sy, sz) = (scoring.x, scoring.y, scoring.z);
+    let Some(t) = telemetry else {
+        return (sx, sy, sz);
+    };
+    let (tx, ty, tz) = (t.x, t.y, t.z);
+
+    if tx == 0.0 && ty == 0.0 && tz == 0.0 {
+        return (sx, sy, sz);
+    }
+    if (tx - sx).hypot(tz - sz) > MAX_DISAGREEMENT_M {
+        return (sx, sy, sz);
+    }
+    (tx, ty, tz)
+}
+
 /// Build a ScoringUpdate and return the player slot ID found in scoring data.
 fn build_scoring_update(sc: &ScoringFrame, tel: Option<&TelemetryFrame>) -> (ServerMessage, i32) {
     let info = &sc.mScoringInfo;
     let mut player_id = -1i32;
 
-    // Build a lookup: vehicle ID → mVirtualEnergy from telemetry buffer
-    let ve_map: std::collections::HashMap<i32, f32> = tel.map(|t| {
+    // Build a lookup: vehicle ID → (mVirtualEnergy, mPos) from telemetry buffer
+    let tel_map: std::collections::HashMap<i32, (f32, rF2Vec3)> = tel.map(|t| {
         t.mVehicles
             .iter()
-            .map(|tv| (tv.mID, tv.mVirtualEnergy))
+            .map(|tv| (tv.mID, (tv.mVirtualEnergy, tv.mPos)))
             .collect()
     }).unwrap_or_default();
 
@@ -203,6 +245,8 @@ fn build_scoring_update(sc: &ScoringFrame, tel: Option<&TelemetryFrame>) -> (Ser
             if v.mIsPlayer != 0 {
                 player_id = v.mID;
             }
+            let entry = tel_map.get(&v.mID);
+            let (pos_x, pos_y, pos_z) = position_of(v.mPos, entry.map(|(_, pos)| *pos));
             VehicleScoring {
                 id:           v.mID,
                 driver_name:  bytes_to_str(&v.mDriverName).to_string(),
@@ -233,11 +277,12 @@ fn build_scoring_update(sc: &ScoringFrame, tel: Option<&TelemetryFrame>) -> (Ser
                 } else {
                     -1.0
                 },
-                pos_x: v.mPos.x,
-                pos_z: v.mPos.z,
+                pos_x,
+                pos_y,
+                pos_z,
                 time_behind_leader: v.mTimeBehindLeader,
                 laps_behind_leader: v.mLapsBehindLeader,
-                virtual_energy: *ve_map.get(&v.mID).unwrap_or(&0.0),
+                virtual_energy: entry.map(|(ve, _)| *ve).unwrap_or(0.0),
             }
         })
         .collect();
@@ -1534,5 +1579,49 @@ async fn auto_shutdown(mut count_rx: watch::Receiver<usize>) {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn vec3(x: f64, y: f64, z: f64) -> rF2Vec3 {
+        rF2Vec3 { x, y, z }
+    }
+
+    /// The whole point of the telemetry source: it is 20× fresher than scoring.
+    #[test]
+    fn telemetry_position_wins_when_it_agrees() {
+        let sc = vec3(100.0, 5.0, 200.0);
+        let tel = vec3(104.0, 5.1, 203.0);
+        assert_eq!(position_of(sc, Some(tel)), (104.0, 5.1, 203.0));
+    }
+
+    /// A slot the game never filled in reads as the world origin, which would
+    /// park the car in the middle of the map.
+    #[test]
+    fn all_zero_telemetry_position_falls_back_to_scoring() {
+        let sc = vec3(100.0, 5.0, 200.0);
+        assert_eq!(position_of(sc, Some(vec3(0.0, 0.0, 0.0))), (100.0, 5.0, 200.0));
+    }
+
+    /// A telemetry row that is not tracking this car at all. Distance is
+    /// measured in the ground plane only — elevation never disagrees by
+    /// hundreds of metres, and including it would only add noise.
+    #[test]
+    fn distant_telemetry_position_falls_back_to_scoring() {
+        let sc = vec3(0.0, 5.0, 0.0);
+        assert_eq!(position_of(sc, Some(vec3(400.0, 5.0, 0.0))), (0.0, 5.0, 0.0));
+        // Just inside the threshold is still trusted.
+        assert_eq!(position_of(sc, Some(vec3(149.0, 5.0, 0.0))), (149.0, 5.0, 0.0));
+    }
+
+    /// Cars in scoring but not in the telemetry buffer keep working exactly as
+    /// they did before the telemetry source existed.
+    #[test]
+    fn missing_telemetry_row_falls_back_to_scoring() {
+        let sc = vec3(100.0, 5.0, 200.0);
+        assert_eq!(position_of(sc, None), (100.0, 5.0, 200.0));
     }
 }

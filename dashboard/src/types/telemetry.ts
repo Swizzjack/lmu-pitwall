@@ -66,8 +66,11 @@ export interface VehicleScoring {
   // Derived sector 3 times (-1.0 = invalid)
   last_sector3: number      // last S3 = last_lap - last_sector2
   best_sector3: number      // best S3 = best_lap - best_sector2
-  // World position in rF2 coordinate space (metres)
+  // World position in rF2 coordinate space (metres). Sampled from the 100 Hz
+  // telemetry buffer where the game publishes it there, from the 5 Hz scoring
+  // block otherwise — the bridge decides per car and the two are interchangeable.
   pos_x: number             // mPos.x — world X coordinate
+  pos_y: number             // mPos.y — world Y coordinate (up axis in rF2), i.e. elevation
   pos_z: number             // mPos.z — world Z coordinate (forward axis in rF2)
   // Race gap
   time_behind_leader: number  // mTimeBehindLeader (s); 0.0 for leader
