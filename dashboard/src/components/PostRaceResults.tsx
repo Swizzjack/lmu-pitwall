@@ -727,7 +727,7 @@ function CompareTableStints({
   if (allStintNums.length === 0) {
     return (
       <div style={{ padding: 32, textAlign: 'center', color: colors.textMuted, fontFamily: fonts.body }}>
-        Stint-Daten werden geladen…
+        Loading stint data…
       </div>
     )
   }
@@ -1262,7 +1262,7 @@ function CompareView({
       <div style={{ flex: 1, overflow: 'auto', minHeight: 0 }}>
         {!compareResult && (
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: 120, color: colors.textMuted, fontFamily: fonts.mono, fontSize: 13 }}>
-            Vergleich wird geladen…
+            Loading comparison…
           </div>
         )}
         {compareResult && compareTab === 'laps' && (
@@ -2161,14 +2161,14 @@ function FilterBar({
 
       {/* Date range */}
       <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-        <span style={{ fontSize: 11, color: colors.textMuted }}>Von</span>
+        <span style={{ fontSize: 11, color: colors.textMuted }}>From</span>
         <input
           type="date"
           value={filters.dateFrom}
           onChange={e => onChange({ ...filters, dateFrom: e.target.value })}
           style={{ ...inputStyle, width: 128, colorScheme: 'dark' }}
         />
-        <span style={{ fontSize: 11, color: colors.textMuted }}>Bis</span>
+        <span style={{ fontSize: 11, color: colors.textMuted }}>To</span>
         <input
           type="date"
           value={filters.dateTo}
@@ -2505,14 +2505,14 @@ export default function PostRaceResults({ onClose }: { onClose: () => void }) {
 
     ws.onerror = () => {
       viewRef.current = 'error'
-      setError('WebSocket-Verbindung fehlgeschlagen.')
+      setError('WebSocket connection failed.')
       setView('error')
     }
 
     ws.onclose = () => {
       if (viewRef.current === 'loading' || viewRef.current === 'loading_detail') {
         viewRef.current = 'error'
-        setError('Verbindung zum Bridge getrennt.')
+        setError('Connection to the bridge was lost.')
         setView('error')
       }
     }

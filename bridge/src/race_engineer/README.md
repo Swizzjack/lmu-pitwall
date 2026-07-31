@@ -1,11 +1,11 @@
 # Race Engineer — Phase 1 (Foundation)
 
-Bridge-Modul für TTS-basierte Race-Engineer-Ansagen via Piper.
+Bridge module for TTS race-engineer callouts via Piper.
 
-## WebSocket-Protokoll
+## WebSocket protocol
 
-Alle Nachrichten sind JSON. **Client→Bridge** nutzt `"command"` als Tag-Feld
-(konsistent mit anderen Bridge-Commands). **Bridge→Client** nutzt `"type"` (Standard).
+Every message is JSON. **Client→Bridge** uses `"command"` as the tag field
+(consistent with the other bridge commands). **Bridge→Client** uses `"type"` (the default).
 
 ### Client → Bridge
 
@@ -26,7 +26,7 @@ Alle Nachrichten sind JSON. **Client→Bridge** nutzt `"command"` als Tag-Feld
 }
 ```
 
-### Bridge → Client (broadcast an alle Clients)
+### Bridge → Client (broadcast to every client)
 
 ```json
 {
@@ -67,7 +67,7 @@ Alle Nachrichten sind JSON. **Client→Bridge** nutzt `"command"` als Tag-Feld
 }
 ```
 
-## Manueller Test (Browser DevConsole)
+## Manual test (browser dev console)
 
 ```javascript
 const ws = new WebSocket("ws://localhost:7437?format=json");
@@ -77,16 +77,16 @@ ws.onmessage = (e) => {
   if (msg.type?.startsWith("Engineer")) console.log(msg);
 };
 
-// Status abfragen
+// Ask for the status
 ws.send(JSON.stringify({ command: "engineer_get_status" }));
 
-// Piper installieren
+// Install Piper
 ws.send(JSON.stringify({ command: "engineer_install_piper" }));
 
-// Voice installieren
+// Install a voice
 ws.send(JSON.stringify({ command: "engineer_install_voice", voice_id: "danny-us-low" }));
 
-// Radio Check (Voice muss installiert sein + Piper)
+// Radio check (needs Piper and the voice installed)
 ws.send(JSON.stringify({
   command: "engineer_synthesize",
   voice_id: "danny-us-low",
@@ -97,7 +97,7 @@ ws.send(JSON.stringify({
 
 ## Voices
 
-| ID | Name | Sprache | Größe |
+| ID | Name | Language | Size |
 |----|------|---------|-------|
 | `cori-gb-high` | Cori | en-GB | ~110 MB |
 | `danny-us-low` | Danny | en-US | ~25 MB |
@@ -106,8 +106,8 @@ ws.send(JSON.stringify({
 
 ## Frontend Sample-MP3s
 
-**Wichtig vor dem Frontend-Release**: Die vier Preview-MP3s müssen unter
-`dashboard/public/samples/race-engineer/` liegen:
+**Required before a frontend release**: the four preview MP3s have to sit in
+`dashboard/public/samples/race-engineer/`:
 
 ```
 cori-gb-high.mp3
@@ -116,9 +116,9 @@ northern-male-gb-medium.mp3
 joe-us-medium.mp3
 ```
 
-Quelle: https://rhasspy.github.io/piper-samples/ — pro Voice den `speaker_0.mp3`-Link
-manuell herunterladen. Die Datei für `northern-male-gb-medium` ist bereits als
-`northern-male-gb-high.mp3` im Repo vorhanden — ersetzen falls nötig.
+Source: https://rhasspy.github.io/piper-samples/ — download the `speaker_0.mp3` link
+for each voice by hand. The file for `northern-male-gb-medium` is already in the
+repo as `northern-male-gb-high.mp3` — replace it if needed.
 
 ## Upgrading Piper
 
@@ -141,10 +141,10 @@ To upgrade to a new Piper release:
 
 > Users will only get the new Piper version when they update LMU Pitwall. There is no auto-upgrade.
 
-## Pfade (Windows)
+## Paths (Windows)
 
-| Ressource | Pfad |
+| Resource | Path |
 |-----------|------|
 | Piper-Executable | `%APPDATA%\LMUPitwall\piper\piper.exe` |
-| Voice-Modelle | `%APPDATA%\LMUPitwall\voices\<id>.onnx` |
+| Voice models | `%APPDATA%\LMUPitwall\voices\<id>.onnx` |
 | Voice-Configs | `%APPDATA%\LMUPitwall\voices\<id>.onnx.json` |
