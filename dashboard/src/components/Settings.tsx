@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect } from 'react'
 import { useSettingsStore, SETTINGS_DEFAULTS } from '../stores/settingsStore'
-import type { FpsLimit, InputChartFps, SpeedUnit, TempUnit, PressureUnit, FuelUnit, ClockFormat, DamageDetail, WeatherDetail, BattleMode, BattleValueMode } from '../stores/settingsStore'
+import type { FpsLimit, InputChartFps, SpeedUnit, TempUnit, PressureUnit, FuelUnit, ClockFormat, DamageDetail, WeatherDetail, TrackMapDetail, BattleMode, BattleValueMode } from '../stores/settingsStore'
 import { colors, fonts } from '../styles/theme'
 import { bridgeHttpBase } from '../utils/bridge'
 
@@ -399,6 +399,21 @@ export default function Settings({ open, onClose }: Props) {
                   { value: 'full', label: 'Full' },
                 ] as { value: DamageDetail; label: string }[]}
                 onChange={(v) => s.update({ damageDetail: v as DamageDetail })}
+              />
+            </Row>
+          </Section>
+
+          {/* Track Map Widget */}
+          <Section title="Track Map Widget">
+            <Row label="Detail Level">
+              <SegmentControl
+                value={s.trackMapDetail}
+                options={[
+                  { value: 'compact', label: 'Compact' },
+                  { value: 'medium', label: 'Medium' },
+                  { value: 'full', label: 'Full' },
+                ] as { value: TrackMapDetail; label: string }[]}
+                onChange={(v) => s.update({ trackMapDetail: v as TrackMapDetail })}
               />
             </Row>
           </Section>

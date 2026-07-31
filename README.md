@@ -54,7 +54,7 @@ The dashboard auto-connects and updates in real time. On first run, Windows Fire
 | **Tires** | Temperatures (inner/middle/outer/carcass), pressures, wear %, and brake disc temps per corner |
 | **Race Engineer** | Spoken callouts during practice, qualifying, and race: tire wear warnings, weather escalations, pace deltas, fuel status, flag alerts |
 | **Strategy** | Virtual Energy (VE) per lap from LMU REST API; Fuel Calculator for multi-stint planning |
-| **Track Map** | SVG live track map with real-time vehicle positions |
+| **Track Map** | Live positions of the whole field, drawn smoothly at your display's refresh rate, on an outline recorded from one clean lap. Sector segments with start/finish and sector lines, local yellows on the sector they apply to, track and sector lengths, elevation range, climb per lap and an elevation profile |
 | **Weather** | Current and forecast conditions |
 | **Inputs** | Throttle, brake, and steering trace |
 | **Flags** | Real-time flag display (green, blue, yellow, red, chequered) with session-phase awareness |

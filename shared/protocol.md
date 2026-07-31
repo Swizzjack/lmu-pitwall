@@ -42,9 +42,18 @@ High-frequency per-frame telemetry data.
 | `wear` | f64 | 0.0–1.0 (1.0 = new) |
 | `brake_temp` | f64 | °C |
 
-### `ScoringUpdate` (~5Hz)
+### `ScoringUpdate` (~20Hz)
 
 Session and standings data.
+
+Most of it comes from LMU's scoring block, which the game rewrites at 5 Hz — so
+those fields repeat between changes no matter how often this message is sent.
+
+`pos_x` / `pos_y` / `pos_z` are the exception. They are read from the telemetry
+rows, which tick at 100 Hz, so a position is fresh on every send. A car whose
+telemetry row is missing, zeroed, or more than 150 m from where scoring puts it
+falls back to the scoring position for that field; consumers cannot tell which
+source a given car used, and do not need to — the two are the same quantity.
 
 ### `SessionInfo` (~1Hz)
 
