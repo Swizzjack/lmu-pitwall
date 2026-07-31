@@ -10,6 +10,7 @@ export type InputChartFps = 60 | 30 | 15
 export type ClockFormat = '12h' | '24h'
 export type DamageDetail = 'compact' | 'medium' | 'full'
 export type WeatherDetail = 'compact' | 'medium' | 'full'
+export type TrackMapDetail = 'compact' | 'medium' | 'full'
 export type PostRaceSortCol = 'date' | 'track' | 'event' | 'type' | 'version' | 'drivers' | 'laps'
 export type SortDir = 'asc' | 'desc'
 export type BattleMode = 'battle' | 'relative'
@@ -53,6 +54,8 @@ export interface SettingsState {
   damageDetail: DamageDetail
   // Weather Widget
   weatherDetail: WeatherDetail
+  // Track Map Widget
+  trackMapDetail: TrackMapDetail
   // Post Race Results
   resultsPath: string
   postRaceSortCol: PostRaceSortCol
@@ -111,6 +114,8 @@ export const SETTINGS_DEFAULTS: SettingsState = {
   damageDetail: 'full',
   // Weather Widget
   weatherDetail: 'full',
+  // Track Map Widget
+  trackMapDetail: 'medium',
   // Post Race Results
   resultsPath: '',
   postRaceSortCol: 'date',
@@ -130,12 +135,12 @@ export const useSettingsStore = create<SettingsStore>()(
         const { speedUnit, tempUnit, pressureUnit, fuelUnit, lapReserve, wsHost, wsPort, primaryColor, accentColor, fpsLimit, inputChartFps,
           timeWidgetShowComputerTime, timeWidgetClockFormat, timeWidgetShowSessionElapsed, timeWidgetShowTimeRemaining, timeWidgetShowCurrentLap,
           standingsShowCompound, standingsShowCarType, standingsShowVE, standingsShowDamage,
-          battleMode, battleValueMode, battleCount, battleShowPosName, battleShowSectors, battleShowLaps, battleShowGap, damageDetail, weatherDetail, resultsPath,
+          battleMode, battleValueMode, battleCount, battleShowPosName, battleShowSectors, battleShowLaps, battleShowGap, damageDetail, weatherDetail, trackMapDetail, resultsPath,
           postRaceSortCol, postRaceSortDir } = get()
         return JSON.stringify({ speedUnit, tempUnit, pressureUnit, fuelUnit, lapReserve, wsHost, wsPort, primaryColor, accentColor, fpsLimit, inputChartFps,
           timeWidgetShowComputerTime, timeWidgetClockFormat, timeWidgetShowSessionElapsed, timeWidgetShowTimeRemaining, timeWidgetShowCurrentLap,
           standingsShowCompound, standingsShowCarType, standingsShowVE, standingsShowDamage,
-          battleMode, battleValueMode, battleCount, battleShowPosName, battleShowSectors, battleShowLaps, battleShowGap, damageDetail, weatherDetail, resultsPath,
+          battleMode, battleValueMode, battleCount, battleShowPosName, battleShowSectors, battleShowLaps, battleShowGap, damageDetail, weatherDetail, trackMapDetail, resultsPath,
           postRaceSortCol, postRaceSortDir }, null, 2)
       },
 
@@ -172,6 +177,7 @@ export const useSettingsStore = create<SettingsStore>()(
           if (typeof data.battleShowGap === 'boolean') valid.battleShowGap = data.battleShowGap
           if (data.damageDetail === 'compact' || data.damageDetail === 'medium' || data.damageDetail === 'full') valid.damageDetail = data.damageDetail
           if (data.weatherDetail === 'compact' || data.weatherDetail === 'medium' || data.weatherDetail === 'full') valid.weatherDetail = data.weatherDetail
+          if (data.trackMapDetail === 'compact' || data.trackMapDetail === 'medium' || data.trackMapDetail === 'full') valid.trackMapDetail = data.trackMapDetail
           if (typeof data.resultsPath === 'string') valid.resultsPath = data.resultsPath
           if (data.postRaceSortCol && POST_RACE_SORT_COLS.includes(data.postRaceSortCol)) valid.postRaceSortCol = data.postRaceSortCol
           if (data.postRaceSortDir === 'asc' || data.postRaceSortDir === 'desc') valid.postRaceSortDir = data.postRaceSortDir
