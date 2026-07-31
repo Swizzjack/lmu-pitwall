@@ -142,6 +142,34 @@ CREATE TABLE IF NOT EXISTS live_laps (
 
 CREATE INDEX IF NOT EXISTS idx_live_laps_match ON live_laps(player_name, lap_num);
 
+-- Per-lap virtual energy for every *other* car on track, captured live from
+-- LMU_Data at each of their S/F crossings.
+--
+-- Separate from `live_laps` because that table is one row per lap of ours and
+-- says so in its UNIQUE key. Here a lap number repeats once per driver, and
+-- only the VE columns exist: VE is the one consumable the sim reports for the
+-- whole field (it is what the Standings widget shows), while fuel and tire
+-- wear are not delivered for a car we are not driving.
+--
+-- `session_key` is the same key `live_laps` uses for the same session, which
+-- is what lets the backfill reuse the anchor found for our own laps.
+CREATE TABLE IF NOT EXISTS live_driver_laps (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_key     TEXT    NOT NULL,
+    recorded_at     INTEGER NOT NULL,
+    track_name      TEXT,
+    session_type    TEXT,
+    driver_name     TEXT    NOT NULL,
+    car_class       TEXT,
+    lap_num         INTEGER NOT NULL,
+    lap_time        REAL,
+    ve_level        REAL,
+    ve_used         REAL,
+    UNIQUE(session_key, driver_name, lap_num)
+);
+
+CREATE INDEX IF NOT EXISTS idx_live_driver_laps_match ON live_driver_laps(driver_name, lap_num);
+
 -- Names the local player has raced under. Needed because a multiplayer result
 -- XML marks every human as isPlayer=1, so the name is the only way to tell
 -- which of them is us. Filled from shared memory while driving, and derived
