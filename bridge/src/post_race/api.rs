@@ -926,7 +926,7 @@ fn query_fun_facts(conn: &Connection) -> Result<(Vec<String>, Option<String>)> {
         facts.push(format!("Pitstops made: {}", fmt_number(pitstops)));
     }
 
-    // ── Konsistenz / Pace ──────────────────────────────────────────────────────
+    // ── Consistency / Pace ─────────────────────────────────────────────────────
 
     // Most consistent race: race session with lowest stddev of player lap times (≥5 laps)
     // SQLite variance: avg(x²) - avg(x)² = population variance
@@ -964,7 +964,7 @@ fn query_fun_facts(conn: &Connection) -> Result<(Vec<String>, Option<String>)> {
         ));
     }
 
-    // ── Zeitlich / Progression ─────────────────────────────────────────────────
+    // ── Time / Progression ─────────────────────────────────────────────────────
 
     // First recorded session: earliest session date + track
     let first_session: Option<(String, String)> = conn
@@ -1005,7 +1005,7 @@ fn query_fun_facts(conn: &Connection) -> Result<(Vec<String>, Option<String>)> {
         facts.push(trend_fact);
     }
 
-    // ── Sozial / Multiplayer ───────────────────────────────────────────────────
+    // ── Social / Multiplayer ───────────────────────────────────────────────────
 
     // Nemesis: driver who finished directly ahead of player most often (player pos = nemesis pos + 1)
     let nemesis: Option<(String, i64)> = conn
@@ -1084,7 +1084,7 @@ fn query_fun_facts(conn: &Connection) -> Result<(Vec<String>, Option<String>)> {
         facts.push(format!("Backmarker sessions: {} — stay humble!", fmt_number(backmarker_sessions)));
     }
 
-    // ── Auto / Klasse ──────────────────────────────────────────────────────────
+    // ── Car / Class ────────────────────────────────────────────────────────────
 
     // Most winning car: car_type with most race wins
     let winning_car: Option<(String, i64)> = conn

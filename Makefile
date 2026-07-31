@@ -59,7 +59,7 @@ prepare-dist:
 	@echo "  Start HTTP server:"
 	@echo "    cd dist && python3 -m http.server 8080"
 	@echo ""
-	@echo "  Download auf Windows:"
+	@echo "  Download on Windows:"
 	@echo "    http://localhost:8080/lmu-pitwall.exe          (Standalone)"
 	@echo "    http://localhost:8080/lmu-pitwall-dist.tar.gz  (Installer-Bundle)"
 	@echo "============================================"
