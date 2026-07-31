@@ -43,6 +43,10 @@ config.json
 .ssh/
 .cargo/
 
+# Environment leftovers from running an agent inside the project directory
+.bash_history
+.local/
+
 # Local agent instructions (not public)
 AGENTS.md
 .pi/

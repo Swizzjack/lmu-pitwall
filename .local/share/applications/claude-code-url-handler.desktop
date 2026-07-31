@@ -1,7 +1,0 @@
-[Desktop Entry]
-Name=Claude Code URL Handler
-Comment=Handle claude-cli:// deep links for Claude Code
-Exec="/usr/lib/node_modules/@anthropic-ai/claude-code/bin/claude.exe" --handle-uri %u
-Type=Application
-NoDisplay=true
-MimeType=x-scheme-handler/claude-cli;
