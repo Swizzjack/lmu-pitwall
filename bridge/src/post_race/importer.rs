@@ -172,8 +172,14 @@ pub fn import_new_sessions(db: &mut Connection, results_folder: &Path) -> Result
     learn_player_identities(db).context("learning player identities")?;
     resolve_local_player(db).context("resolving the local player")?;
     let filled = backfill_live_laps(db).context("backfilling live lap data")?;
-    if filled > 0 {
-        tracing::info!(laps = filled, "filled fuel/tire data from live capture");
+    if filled.own_laps > 0 {
+        tracing::info!(laps = filled.own_laps, "filled fuel/tire data from live capture");
+    }
+    if filled.field_laps > 0 {
+        tracing::info!(
+            laps = filled.field_laps,
+            "filled virtual energy for the rest of the field from live capture"
+        );
     }
 
     Ok(res)
@@ -349,10 +355,12 @@ fn resolve_local_player(db: &Connection) -> Result<()> {
 // 3c. Live-capture backfill
 // ---------------------------------------------------------------------------
 
-/// Fills fuel / virtual energy / tire wear on player laps that the XML left
-/// empty, from laps captured live while driving.
+/// Fills fuel / virtual energy / tire wear on laps that the XML left empty,
+/// from laps captured live while driving.
 ///
-/// Returns the number of lap rows updated.
+/// Our own laps get all of it; every other driver in the same session gets
+/// virtual energy, which is the one consumable the sim reports for cars we are
+/// not driving. Returns how many rows of each were written.
 ///
 /// Only NULL columns are written, so an offline result — where LMU exports the
 /// real numbers — always keeps its own values and this is a no-op. Online,
@@ -369,7 +377,9 @@ fn resolve_local_player(db: &Connection) -> Result<()> {
 /// result exports as `--.----` has no time to match on, and in a real online
 /// race two of twelve laps looked like that — laps that burned fuel like any
 /// other and would otherwise stay blank.
-fn backfill_live_laps(db: &Connection) -> Result<usize> {
+/// A session that stays unanchored loses its rivals' virtual energy along with
+/// our own fuel and tires — everything below hangs off the same match.
+fn backfill_live_laps(db: &Connection) -> Result<BackfillCounts> {
     let candidates = anchor_candidates(db)?;
     let (anchors, mut rejected) = choose_anchors(candidates);
 
@@ -399,9 +409,9 @@ fn backfill_live_laps(db: &Connection) -> Result<usize> {
         );
     }
 
-    let mut updated = 0;
+    let mut counts = BackfillCounts::default();
     for (session_key, driver_id) in &anchors {
-        updated += db
+        counts.own_laps += db
             .execute(
                 "UPDATE laps AS l SET
                     fuel_level = COALESCE(l.fuel_level, live.fuel_level),
@@ -425,8 +435,45 @@ fn backfill_live_laps(db: &Connection) -> Result<usize> {
                 rusqlite::params![session_key, driver_id],
             )
             .with_context(|| format!("filling laps from live session {session_key}"))?;
+
+        // The rest of the field rides on the same anchor: it identified the
+        // *session*, and within one session a name identifies a driver. No
+        // second lap-time fingerprint is needed — and none would work, because
+        // a rival's capture and their result row come from the same scoring
+        // rows, so they would agree by construction rather than by evidence.
+        counts.field_laps += db
+            .execute(
+                "UPDATE laps AS l SET
+                    ve_level = COALESCE(l.ve_level, live.ve_level),
+                    ve_used  = COALESCE(l.ve_used,  live.ve_used)
+                 FROM live_driver_laps AS live
+                 JOIN drivers AS d
+                   ON d.name = live.driver_name
+                  AND d.session_id = (SELECT session_id FROM drivers WHERE id = ?2)
+                 WHERE live.session_key = ?1
+                   AND l.driver_id = d.id
+                   AND l.lap_num = live.lap_num
+                   AND (l.ve_level IS NULL OR l.ve_used IS NULL)
+                   -- A name held by two entries of the same result — a driver
+                   -- swap, or two people racing under one name — cannot be
+                   -- resolved to a single row, and guessing would write one
+                   -- car's energy onto another car's laps.
+                   AND (SELECT COUNT(*) FROM drivers x
+                        WHERE x.session_id = d.session_id AND x.name = d.name) = 1",
+                rusqlite::params![session_key, driver_id],
+            )
+            .with_context(|| format!("filling field VE from live session {session_key}"))?;
     }
-    Ok(updated)
+    Ok(counts)
+}
+
+/// What a backfill pass wrote, split by whose laps it landed on.
+#[derive(Debug, Default, PartialEq, Eq)]
+struct BackfillCounts {
+    /// Our own laps, filled with fuel, VE and tire wear.
+    own_laps: usize,
+    /// Other drivers' laps, filled with virtual energy only.
+    field_laps: usize,
 }
 
 /// Every captured session and how many laps it holds.
@@ -1185,6 +1232,155 @@ mod tests {
             },
         )
         .unwrap();
+    }
+
+    fn insert_live_rival(db: &Connection, name: &str, lap_num: i32, ve: f64, ve_used: Option<f64>) {
+        use crate::post_race::live_laps::{insert_live_driver_lap, LiveDriverLap};
+        insert_live_driver_lap(
+            db,
+            &LiveDriverLap {
+                session_key: "10/Monza/Race".into(),
+                recorded_at: 1785334388,
+                track_name: "Monza".into(),
+                session_type: "Race".into(),
+                driver_name: name.into(),
+                car_class: Some("HYPERCAR".into()),
+                lap_num,
+                lap_time: None,
+                ve_level: Some(ve),
+                ve_used,
+            },
+        )
+        .unwrap();
+    }
+
+    /// The rivals' virtual energy rides on the anchor our own laps establish:
+    /// it identifies the session, and within it the name identifies the driver.
+    #[test]
+    fn live_capture_fills_the_virtual_energy_of_the_rest_of_the_field() {
+        let dir = fixture_dir("backfill_field_ve");
+        write_xml(&dir, "online.xml", MP_XML);
+        let mut db = init_database(Path::new(":memory:")).unwrap();
+
+        // Our own laps — without them nothing anchors.
+        insert_live(&db, 1, 95.5, 0.77, 0.98);
+        insert_live(&db, 2, 94.0, 0.74, 0.96);
+        insert_live(&db, 3, 94.5, 0.71, 0.94);
+
+        insert_live_rival(&db, "Yerin Kim", 1, 0.92, Some(0.08));
+        insert_live_rival(&db, "Yerin Kim", 2, 0.84, Some(0.08));
+        insert_live_rival(&db, "Bas Beets", 1, 0.90, None);
+        // A capture for someone this result never mentions is simply unused.
+        insert_live_rival(&db, "Ghost Driver", 1, 0.50, None);
+
+        import_new_sessions(&mut db, &dir).unwrap();
+
+        let mut stmt = db
+            .prepare(
+                "SELECT d.name, l.lap_num, l.ve_level, l.ve_used FROM laps l
+                 JOIN drivers d ON d.id = l.driver_id
+                 JOIN sessions s ON s.id = l.session_id
+                 WHERE s.setting = 'Multiplayer' AND d.is_self = 0
+                 ORDER BY d.name, l.lap_num",
+            )
+            .unwrap();
+        let rows: Vec<(String, i64, Option<f64>, Option<f64>)> = stmt
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+            .unwrap()
+            .filter_map(|r| r.ok())
+            .collect();
+
+        assert_eq!(
+            rows,
+            vec![
+                ("Bas Beets".into(), 1, Some(0.90), None),
+                ("Yerin Kim".into(), 1, Some(0.92), Some(0.08)),
+                ("Yerin Kim".into(), 2, Some(0.84), Some(0.08)),
+            ]
+        );
+
+        // Our own laps still get everything, not just the energy.
+        let fuel: Option<f64> = db
+            .query_row(
+                "SELECT l.fuel_level FROM laps l
+                 JOIN drivers d ON d.id = l.driver_id
+                 WHERE d.is_self = 1 AND l.lap_num = 1",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(fuel, Some(0.77));
+    }
+
+    /// Two entries under one name cannot be told apart, and writing one car's
+    /// energy onto the other's laps would be worse than leaving both blank.
+    #[test]
+    fn a_name_held_by_two_entries_is_left_alone() {
+        const TWIN_XML: &str = r#"<?xml version="1.0" encoding="UTF-8"?>
+<rFactorXML>
+  <RaceResults>
+    <Setting>Multiplayer</Setting>
+    <TrackVenue>Monza</TrackVenue>
+    <Race>
+      <Driver>
+        <Name>Mirco Gyr</Name>
+        <isPlayer>1</isPlayer>
+        <Position>1</Position>
+        <Laps>2</Laps>
+        <Lap num="1" p="1" FL="0,Medium">95.5000</Lap>
+        <Lap num="2" p="1" FL="0,Medium">94.0000</Lap>
+      </Driver>
+      <Driver>
+        <Name>Yerin Kim</Name>
+        <isPlayer>1</isPlayer>
+        <Position>2</Position>
+        <Laps>1</Laps>
+        <Lap num="1" p="2" FL="0,Medium">95.1000</Lap>
+      </Driver>
+      <Driver>
+        <Name>Yerin Kim</Name>
+        <isPlayer>1</isPlayer>
+        <Position>3</Position>
+        <Laps>1</Laps>
+        <Lap num="1" p="3" FL="0,Medium">96.8000</Lap>
+      </Driver>
+    </Race>
+  </RaceResults>
+</rFactorXML>"#;
+
+        let dir = fixture_dir("backfill_field_twin_names");
+        write_xml(&dir, "online.xml", TWIN_XML);
+        let mut db = init_database(Path::new(":memory:")).unwrap();
+
+        insert_live(&db, 1, 95.5, 0.77, 0.98);
+        insert_live(&db, 2, 94.0, 0.74, 0.96);
+        insert_live_rival(&db, "Yerin Kim", 1, 0.92, Some(0.08));
+
+        import_new_sessions(&mut db, &dir).unwrap();
+
+        let filled: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM laps l
+                 JOIN drivers d ON d.id = l.driver_id
+                 WHERE d.name = 'Yerin Kim' AND l.ve_level IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(filled, 0, "an ambiguous name is not guessed at");
+
+        // …and the session did anchor, so the zero above is the guard talking
+        // and not a match that never happened.
+        let ours: i64 = db
+            .query_row(
+                "SELECT COUNT(*) FROM laps l
+                 JOIN drivers d ON d.id = l.driver_id
+                 WHERE d.is_self = 1 AND l.fuel_level IS NOT NULL",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(ours, 2, "our own laps were filled from the same anchor");
     }
 
     #[test]

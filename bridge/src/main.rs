@@ -951,18 +951,22 @@ async fn task_broadcaster(
                 None
             };
 
-            // Live lap capture: one owned row per player S/F crossing, written
-            // outside the lock below.
+            // Live lap capture: owned rows for every S/F crossing on this tick —
+            // ours with fuel and tires, the rest of the field with virtual
+            // energy — written outside the lock below.
             let captured_lap = if send_scoring {
-                s.scoring.as_ref().and_then(|sc| {
-                    live_lap_recorder.process(
-                        sc,
-                        s.telemetry.as_ref(),
-                        session_type_str(sc.mScoringInfo.mSession),
-                    )
-                })
+                s.scoring
+                    .as_ref()
+                    .map(|sc| {
+                        live_lap_recorder.process(
+                            sc,
+                            s.telemetry.as_ref(),
+                            session_type_str(sc.mScoringInfo.mSession),
+                        )
+                    })
+                    .unwrap_or_default()
             } else {
-                None
+                Default::default()
             };
 
             // Lap tracker: detect S/F crossings and build AllDriversUpdate.
@@ -990,25 +994,44 @@ async fn task_broadcaster(
         };
         // Lock released — now broadcast without holding it.
 
-        // Persist the captured lap off the async runtime: once per lap, so the
-        // spawn costs less than the SQLite write it avoids blocking on.
-        if let Some(lap) = captured_lap {
-            // One line per lap, at info: this is the only evidence that the
-            // capture ran at all, and without it a session that quietly
+        // Persist the captured laps off the async runtime: once per crossing,
+        // so the spawn costs less than the SQLite writes it avoids blocking on.
+        if !captured_lap.is_empty() {
+            // One line per lap of ours, at info: this is the only evidence that
+            // the capture ran at all, and without it a session that quietly
             // recorded nothing looks exactly like one the backfill failed on.
-            info!(
-                lap = lap.lap_num,
-                fuel = ?lap.fuel_level,
-                ve = ?lap.ve_level,
-                tw_fl = ?lap.tw_fl,
-                time = ?lap.lap_time,
-                "live lap captured"
-            );
+            if let Some(lap) = &captured_lap.player {
+                info!(
+                    lap = lap.lap_num,
+                    fuel = ?lap.fuel_level,
+                    ve = ?lap.ve_level,
+                    tw_fl = ?lap.tw_fl,
+                    time = ?lap.lap_time,
+                    "live lap captured"
+                );
+            }
+            // The field is summarised rather than listed: a full grid crossing
+            // together would otherwise put twenty lines in the log per lap.
+            if !captured_lap.drivers.is_empty() {
+                info!(
+                    drivers = captured_lap.drivers.len(),
+                    "captured virtual energy for other cars crossing the line"
+                );
+            }
             tokio::task::spawn_blocking(move || {
                 match post_race::database::get_db() {
                     Ok(db) => {
-                        if let Err(e) = post_race::live_laps::insert_live_lap(&db.lock(), &lap) {
-                            warn!("Could not store live lap data: {}", e);
+                        let conn = db.lock();
+                        if let Some(lap) = &captured_lap.player {
+                            if let Err(e) = post_race::live_laps::insert_live_lap(&conn, lap) {
+                                warn!("Could not store live lap data: {}", e);
+                            }
+                        }
+                        for lap in &captured_lap.drivers {
+                            if let Err(e) = post_race::live_laps::insert_live_driver_lap(&conn, lap)
+                            {
+                                warn!("Could not store live lap data for {}: {}", lap.driver_name, e);
+                            }
                         }
                     }
                     Err(e) => warn!("Could not open results database: {}", e),
