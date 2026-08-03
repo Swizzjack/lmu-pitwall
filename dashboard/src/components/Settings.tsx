@@ -1,6 +1,6 @@
 import { useRef, useState, useEffect } from 'react'
 import { useSettingsStore, SETTINGS_DEFAULTS } from '../stores/settingsStore'
-import type { FpsLimit, InputChartFps, SpeedUnit, TempUnit, PressureUnit, FuelUnit, ClockFormat, DamageDetail, WeatherDetail, TrackMapDetail, BattleMode, BattleValueMode } from '../stores/settingsStore'
+import type { FpsLimit, InputChartFps, SpeedUnit, TempUnit, PressureUnit, FuelUnit, ClockFormat, DamageDetail, WeatherDetail, TrackMapDetail, BattleMode, BattleValueMode, StandingsClassFilter, StandingsGapMode } from '../stores/settingsStore'
 import { colors, fonts } from '../styles/theme'
 import { bridgeHttpBase } from '../utils/bridge'
 
@@ -420,6 +420,26 @@ export default function Settings({ open, onClose }: Props) {
 
           {/* Standings Widget */}
           <Section title="Standings Widget">
+            <Row label="Classes Shown">
+              <SegmentControl
+                value={s.standingsClassFilter}
+                options={[
+                  { value: 'all', label: 'All' },
+                  { value: 'own', label: 'My Class' },
+                ] as { value: StandingsClassFilter; label: string }[]}
+                onChange={(v) => s.update({ standingsClassFilter: v as StandingsClassFilter })}
+              />
+            </Row>
+            <Row label="Gap To">
+              <SegmentControl
+                value={s.standingsGapMode}
+                options={[
+                  { value: 'overall', label: 'Leader' },
+                  { value: 'class', label: 'Class Leader' },
+                ] as { value: StandingsGapMode; label: string }[]}
+                onChange={(v) => s.update({ standingsGapMode: v as StandingsGapMode })}
+              />
+            </Row>
             <Row label="Compound">
               <SegmentControl
                 value={s.standingsShowCompound ? 'on' : 'off'}
