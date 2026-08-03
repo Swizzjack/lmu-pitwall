@@ -15,6 +15,8 @@ export type PostRaceSortCol = 'date' | 'track' | 'event' | 'type' | 'version' | 
 export type SortDir = 'asc' | 'desc'
 export type BattleMode = 'battle' | 'relative'
 export type BattleValueMode = 'absolute' | 'delta'  // 'delta' = sectors/laps shown relative to player
+export type StandingsClassFilter = 'all' | 'own'    // 'own' = only cars in the player's class
+export type StandingsGapMode = 'overall' | 'class'  // gap reference: overall leader or class leader
 
 const POST_RACE_SORT_COLS: PostRaceSortCol[] = ['date', 'track', 'event', 'type', 'version', 'drivers', 'laps']
 
@@ -42,6 +44,8 @@ export interface SettingsState {
   standingsShowCarType: boolean
   standingsShowVE: boolean
   standingsShowDamage: boolean
+  standingsClassFilter: StandingsClassFilter
+  standingsGapMode: StandingsGapMode
   // Battle Widget
   battleMode: BattleMode        // 'battle' = standings position ±N, 'relative' = nearest on track
   battleValueMode: BattleValueMode  // 'absolute' = fixed times, 'delta' = relative to player (Gap excluded)
@@ -102,6 +106,8 @@ export const SETTINGS_DEFAULTS: SettingsState = {
   standingsShowCarType: true,
   standingsShowVE: true,
   standingsShowDamage: true,
+  standingsClassFilter: 'all',
+  standingsGapMode: 'overall',
   // Battle Widget
   battleMode: 'battle',
   battleValueMode: 'absolute',
@@ -134,12 +140,12 @@ export const useSettingsStore = create<SettingsStore>()(
       exportSettings: () => {
         const { speedUnit, tempUnit, pressureUnit, fuelUnit, lapReserve, wsHost, wsPort, primaryColor, accentColor, fpsLimit, inputChartFps,
           timeWidgetShowComputerTime, timeWidgetClockFormat, timeWidgetShowSessionElapsed, timeWidgetShowTimeRemaining, timeWidgetShowCurrentLap,
-          standingsShowCompound, standingsShowCarType, standingsShowVE, standingsShowDamage,
+          standingsShowCompound, standingsShowCarType, standingsShowVE, standingsShowDamage, standingsClassFilter, standingsGapMode,
           battleMode, battleValueMode, battleCount, battleShowPosName, battleShowSectors, battleShowLaps, battleShowGap, damageDetail, weatherDetail, trackMapDetail, resultsPath,
           postRaceSortCol, postRaceSortDir } = get()
         return JSON.stringify({ speedUnit, tempUnit, pressureUnit, fuelUnit, lapReserve, wsHost, wsPort, primaryColor, accentColor, fpsLimit, inputChartFps,
           timeWidgetShowComputerTime, timeWidgetClockFormat, timeWidgetShowSessionElapsed, timeWidgetShowTimeRemaining, timeWidgetShowCurrentLap,
-          standingsShowCompound, standingsShowCarType, standingsShowVE, standingsShowDamage,
+          standingsShowCompound, standingsShowCarType, standingsShowVE, standingsShowDamage, standingsClassFilter, standingsGapMode,
           battleMode, battleValueMode, battleCount, battleShowPosName, battleShowSectors, battleShowLaps, battleShowGap, damageDetail, weatherDetail, trackMapDetail, resultsPath,
           postRaceSortCol, postRaceSortDir }, null, 2)
       },
@@ -168,6 +174,8 @@ export const useSettingsStore = create<SettingsStore>()(
           if (typeof data.standingsShowCarType === 'boolean') valid.standingsShowCarType = data.standingsShowCarType
           if (typeof data.standingsShowVE === 'boolean') valid.standingsShowVE = data.standingsShowVE
           if (typeof data.standingsShowDamage === 'boolean') valid.standingsShowDamage = data.standingsShowDamage
+          if (data.standingsClassFilter === 'all' || data.standingsClassFilter === 'own') valid.standingsClassFilter = data.standingsClassFilter
+          if (data.standingsGapMode === 'overall' || data.standingsGapMode === 'class') valid.standingsGapMode = data.standingsGapMode
           if (data.battleMode === 'battle' || data.battleMode === 'relative') valid.battleMode = data.battleMode
           if (data.battleValueMode === 'absolute' || data.battleValueMode === 'delta') valid.battleValueMode = data.battleValueMode
           if (typeof data.battleCount === 'number' && data.battleCount >= 1 && data.battleCount <= 3) valid.battleCount = Math.round(data.battleCount)

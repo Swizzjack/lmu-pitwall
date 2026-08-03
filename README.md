@@ -48,7 +48,7 @@ The dashboard auto-connects and updates in real time. On first run, Windows Fire
 | Widget | Description |
 |--------|-------------|
 | **Fuel** | Fuel remaining, median consumption per lap (rolling average, excludes first lap of each stint), laps to empty, fuel needed to finish |
-| **Standings** | Live positions with car number, brand, gap to leader, sector times, pit status, and a MiniDamageGrid per car |
+| **Standings** | Live positions with car number, brand, gap, sector times, pit status, and a MiniDamageGrid per car. In multiclass fields the list can be narrowed to your own class, and the gap can be measured against your class leader instead of the overall leader |
 | **VehicleStatus** | Damage overview at three detail levels: compact, medium, or full — covers aero, brakes, and suspension |
 | **Electronics** | TC, ABS, Engine Map, ARB, Regen, Brake Migration — read directly from shared memory, no button-counting; works in online sessions (EAC-protected) |
 | **Tires** | Temperatures (inner/middle/outer/carcass), pressures, wear %, and brake disc temps per corner |

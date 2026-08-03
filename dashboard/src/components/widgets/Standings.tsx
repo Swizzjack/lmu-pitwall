@@ -24,16 +24,23 @@ function ClassBadge({ position, vehicleClass }: { position: string; vehicleClass
   )
 }
 
-function fmtGap(v: VehicleScoring, leader: VehicleScoring, isRace: boolean): string {
-  if (v.id === leader.id) return '—'
+// Gap from `v` to the reference car — the overall leader or its own class leader.
+// Both mTimeBehindLeader and mLapsBehindLeader are measured against the overall
+// leader, so the gap to any other car is their difference. With the overall
+// leader as reference both of its terms are zero and this reduces to the raw
+// values. (Same derivation the Proximity widget uses for player-relative gaps.)
+function fmtGap(v: VehicleScoring, ref: VehicleScoring, isRace: boolean): string {
+  if (v.id === ref.id) return '—'
   if (isRace) {
-    if (v.laps_behind_leader > 0) return `+${v.laps_behind_leader} lap${v.laps_behind_leader > 1 ? 's' : ''}`
-    if (v.time_behind_leader > 0) return fmtTimeDiff(v.time_behind_leader)
+    const lapsDown = v.laps_behind_leader - ref.laps_behind_leader
+    if (lapsDown > 0) return `+${lapsDown} lap${lapsDown > 1 ? 's' : ''}`
+    const gap = v.time_behind_leader - ref.time_behind_leader
+    if (gap > 0) return fmtTimeDiff(gap)
     return '---'
   }
   // Practice / Qualifying: gap by best lap time
-  if (v.best_lap_time <= 0 || leader.best_lap_time <= 0) return '---'
-  const diff = v.best_lap_time - leader.best_lap_time
+  if (v.best_lap_time <= 0 || ref.best_lap_time <= 0) return '---'
+  const diff = v.best_lap_time - ref.best_lap_time
   if (diff < 0) return '---'
   return fmtTimeDiff(diff)
 }
@@ -99,6 +106,8 @@ export default function Standings() {
   const settingShowCarType  = useSettingsStore((s) => s.standingsShowCarType)
   const settingShowVE       = useSettingsStore((s) => s.standingsShowVE)
   const settingShowDamage   = useSettingsStore((s) => s.standingsShowDamage)
+  const settingClassFilter  = useSettingsStore((s) => s.standingsClassFilter)
+  const settingGapMode      = useSettingsStore((s) => s.standingsGapMode)
 
   const isRace = sessionType?.toLowerCase().includes('race') ?? false
 
@@ -125,10 +134,9 @@ export default function Standings() {
   )
   const leader = sorted[0]
 
-  const playerPosition = useMemo(
-    () => sorted.find(v => v.id === playerId)?.position ?? -1,
-    [sorted, playerId],
-  )
+  const player = useMemo(() => sorted.find((v) => v.id === playerId), [sorted, playerId])
+  const playerPosition = player?.position ?? -1
+  const playerClass = player?.vehicle_class || ''
   useEffect(() => {
     const container = scrollableRef.current
     const row = playerRowRef.current
@@ -153,16 +161,34 @@ export default function Standings() {
     return map
   }, [sorted])
 
+  // Leader of each class = its first car in the overall order
+  const classLeaders = useMemo(() => {
+    const map = new Map<string, VehicleScoring>()
+    for (const v of sorted) {
+      const cls = v.vehicle_class || ''
+      if (!map.has(cls)) map.set(cls, v)
+    }
+    return map
+  }, [sorted])
+
+  // Visible rows. Filtering to the player's class needs that class to be known —
+  // before the player's car appears in scoring (or when spectating) it is not,
+  // and filtering on an empty class would blank the widget. Show all instead.
+  const rows = useMemo(() => {
+    if (settingClassFilter !== 'own' || !playerClass) return sorted
+    return sorted.filter((v) => (v.vehicle_class || '') === playerClass)
+  }, [sorted, settingClassFilter, playerClass])
+
   // Car name column only when widget is wide enough AND setting allows it
   const showCarName = settingShowCarType && containerWidth >= 680
 
-  // VE column only when at least one vehicle has Virtual Energy data AND setting allows it
-  const hasVeData = settingShowVE && sorted.some((v) => (v.virtual_energy ?? 0) > 0)
+  // VE column only when at least one visible vehicle has Virtual Energy data AND setting allows it
+  const hasVeData = settingShowVE && rows.some((v) => (v.virtual_energy ?? 0) > 0)
 
-  // Compound column only when at least one driver has compound name data AND setting allows it
-  const hasCompoundData = settingShowCompound && compoundById.size > 0
+  // Compound column only when at least one visible driver has compound name data AND setting allows it
+  const hasCompoundData = settingShowCompound && rows.some((v) => compoundById.has(v.id))
 
-  // Damage column: show when any driver has at least one damaged zone
+  // Damage column: show when any visible driver has at least one damaged zone
   const damageById = useMemo(() => {
     const map = new Map<number, number[]>()
     for (const d of allDrivers) {
@@ -170,14 +196,15 @@ export default function Standings() {
     }
     return map
   }, [allDrivers])
-  const hasDamageData = settingShowDamage && [...damageById.values()].some(s => s.some(v => v > 0))
+  const hasDamageData = settingShowDamage && rows.some((v) => (damageById.get(v.id) ?? []).some((s) => s > 0))
 
-  // Session best per sector and lap (minimum across all vehicles with valid data)
+  // Best per sector and lap across the visible rows — so the purple marker means
+  // "best in this list", which is the class best whenever the list is filtered.
   const validNums = (arr: number[]) => arr.filter((x) => x > 0)
-  const sbS1 = Math.min(...validNums(sorted.map((v) => v.best_sector1)))
-  const sbS2 = Math.min(...validNums(sorted.map(bestS2)))
-  const sbS3 = Math.min(...validNums(sorted.map((v) => v.best_sector3)))
-  const sbLap = Math.min(...validNums(sorted.map((v) => v.best_lap_time)))
+  const sbS1 = Math.min(...validNums(rows.map((v) => v.best_sector1)))
+  const sbS2 = Math.min(...validNums(rows.map(bestS2)))
+  const sbS3 = Math.min(...validNums(rows.map((v) => v.best_sector3)))
+  const sbLap = Math.min(...validNums(rows.map((v) => v.best_lap_time)))
 
   // Column widths — sized for 13px mono strings
   const W_POS  = 44   // class position badge
@@ -210,12 +237,12 @@ export default function Standings() {
           {sessionType || 'Standings'}
         </span>
         <span style={{ fontFamily: fonts.mono, fontSize: 15, color: colors.textMuted }}>
-          {numVehicles} cars
+          {rows.length < sorted.length ? `${rows.length} / ${numVehicles}` : numVehicles} cars
         </span>
       </div>
 
       {/* Column header row */}
-      {sorted.length > 0 && (
+      {rows.length > 0 && (
         <div style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '0 4px 3px', marginBottom: 2, borderBottom: `1px solid ${colors.border}33` }}>
           {colHdr('POS', W_POS)}
           {colHdr('#', W_NUM)}
@@ -229,18 +256,18 @@ export default function Standings() {
           {colHdr('S3', W_SEC)}
           {colHdr('BEST LAP', W_LAP)}
           {colHdr('LAST LAP', W_LAST)}
-          {colHdr('GAP', W_GAP)}
+          {colHdr(settingGapMode === 'class' ? 'GAP CLS' : 'GAP', W_GAP)}
         </div>
       )}
 
       {/* Table body */}
-      {sorted.length === 0 ? (
+      {rows.length === 0 ? (
         <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', color: colors.textMuted, fontFamily: fonts.body, fontSize: 15 }}>
           Waiting for session…
         </div>
       ) : (
         <div ref={scrollableRef} style={{ flex: 1, overflowY: 'auto' }}>
-          {sorted.map((v) => {
+          {rows.map((v) => {
             const isPlayer = v.id === playerId
             const vS1 = v.best_sector1
             const vS2 = bestS2(v)
@@ -368,10 +395,17 @@ export default function Standings() {
                   {fmtLap(v.last_lap_time)}
                 </span>
 
-                {/* Gap to leader */}
-                <span style={{ fontFamily: fonts.mono, fontSize: 13, color: colors.textMuted, width: W_GAP, textAlign: 'right', flexShrink: 0 }}>
-                  {leader ? fmtGap(v, leader, isRace) : '---'}
-                </span>
+                {/* Gap to the overall leader or to this car's class leader */}
+                {(() => {
+                  const gapRef = settingGapMode === 'class'
+                    ? (classLeaders.get(v.vehicle_class || '') ?? leader)
+                    : leader
+                  return (
+                    <span style={{ fontFamily: fonts.mono, fontSize: 13, color: colors.textMuted, width: W_GAP, textAlign: 'right', flexShrink: 0 }}>
+                      {gapRef ? fmtGap(v, gapRef, isRace) : '---'}
+                    </span>
+                  )
+                })()}
               </div>
             )
           })}
