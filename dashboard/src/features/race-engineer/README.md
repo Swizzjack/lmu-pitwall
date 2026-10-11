@@ -39,10 +39,12 @@
 ## Manual Testing via Dev Console
 
 ```javascript
-// Get the WS connection details from settings
-const { wsHost, wsPort } = window.__zustand_settingsStore?.getState?.() ?? { wsHost: 'localhost', wsPort: 9000 }
-
-const ws = new WebSocket(`ws://${wsHost}:${wsPort}`)
+// Auto connection: use the dashboard origin, including HTTPS/WSS behind a proxy.
+// For an explicit bridge target, override hostname and port below.
+const url = new URL(window.location.origin)
+url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:'
+url.searchParams.set('format', 'json')
+const ws = new WebSocket(url)
 ws.onopen = () => {
   // Check status
   ws.send(JSON.stringify({ command: 'engineer_get_status' }))

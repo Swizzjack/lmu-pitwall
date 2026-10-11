@@ -1,18 +1,19 @@
 import { useSettingsStore } from '../stores/settingsStore'
 
-function resolveTarget(): { host: string; port: string } {
+function resolveTarget(): string {
   const { wsHost, wsPort } = useSettingsStore.getState()
   const host = wsHost.trim() || window.location.hostname
-  const port = wsPort > 0 ? String(wsPort) : (window.location.port || '9000')
-  return { host, port }
+  // Auto follows the page's port, including the default HTTP(S) port.
+  const port = wsPort > 0 ? String(wsPort) : window.location.port
+  return port ? `${host}:${port}` : host
 }
 
 export function bridgeWsUrl(): string {
-  const { host, port } = resolveTarget()
-  return `ws://${host}:${port}`
+  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:'
+  return `${protocol}//${resolveTarget()}`
 }
 
 export function bridgeHttpBase(): string {
-  const { host, port } = resolveTarget()
-  return `http://${host}:${port}`
+  const protocol = window.location.protocol === 'https:' ? 'https:' : 'http:'
+  return `${protocol}//${resolveTarget()}`
 }

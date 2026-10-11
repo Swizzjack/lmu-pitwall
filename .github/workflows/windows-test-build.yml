@@ -1,0 +1,82 @@
+name: Windows test build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [fix/https-reverse-proxy]
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+      - name: Install dashboard dependencies
+        working-directory: dashboard
+        run: npm ci
+      - name: Test bridge connection settings
+        working-directory: dashboard
+        run: node --test tests/*.test.mjs
+      - name: Build dashboard
+        working-directory: dashboard
+        run: npm run build
+      - name: Select Rust toolchain
+        run: rustup toolchain install stable --profile minimal
+      - name: Test bridge
+        working-directory: bridge
+        run: cargo +stable test --locked
+      - name: Build Windows executable
+        working-directory: bridge
+        run: cargo +stable build --locked --release
+      - name: Package executable and provenance
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force package | Out-Null
+          Copy-Item bridge/target/release/lmu-pitwall.exe package/
+          $hash = (Get-FileHash package/lmu-pitwall.exe -Algorithm SHA256).Hash.ToLower()
+          "$hash  lmu-pitwall.exe" | Set-Content package/SHA256SUMS.txt
+          "Repository: $env:GITHUB_REPOSITORY`nCommit: $env:GITHUB_SHA`nRun: $env:GITHUB_SERVER_URL/$env:GITHUB_REPOSITORY/actions/runs/$env:GITHUB_RUN_ID" | Set-Content package/BUILD-INFO.txt
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: lmu-pitwall-windows-${{ github.sha }}
+          path: package/
+          if-no-files-found: error
+          retention-days: 30
+
+  contributing-release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: '24'
+      - name: Install dashboard dependencies
+        working-directory: dashboard
+        run: npm ci
+      - name: Install cross compilation tools
+        run: |
+          rustup target add x86_64-pc-windows-gnu
+          python3 -m venv "$RUNNER_TEMP/zig-tools"
+          "$RUNNER_TEMP/zig-tools/bin/pip" install cargo-zigbuild ziglang==0.13.0
+          echo "$RUNNER_TEMP/zig-tools/bin" >> "$GITHUB_PATH"
+          ZIG_BINARY=$("$RUNNER_TEMP/zig-tools/bin/python" -c 'import pathlib, ziglang; print(pathlib.Path(ziglang.__file__).parent / "zig")')
+          echo "ZIG_PATH=$ZIG_BINARY" >> "$GITHUB_ENV"
+          echo "CARGO_ZIGBUILD_ZIG_PATH=$ZIG_BINARY" >> "$GITHUB_ENV"
+      - name: Run documented Contributing build
+        run: ./scripts/release.sh --no-bump --no-serve --no-installer
+      - name: Verify version files unchanged
+        run: git diff --exit-code -- VERSION bridge/Cargo.toml bridge/Cargo.lock dashboard/package.json dashboard/package-lock.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: lmu-pitwall-contributing-release-${{ github.sha }}
+          path: dist/lmu-pitwall-dist.tar.gz
+          if-no-files-found: error

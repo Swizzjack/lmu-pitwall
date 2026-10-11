@@ -58,8 +58,11 @@ export default function Settings({ open, onClose }: Props) {
     if (open) setSavedTracks(getSavedTracks())
   }, [open])
 
-  // Port "Save & Restart" state
+  // Connection port and internal server port are independent.
   const [portInput, setPortInput] = useState<string>(() => s.wsPort > 0 ? String(s.wsPort) : '')
+  const [serverPortInput, setServerPortInput] = useState('')
+  const [followServerPort, setFollowServerPort] = useState(false)
+  const [connectionError, setConnectionError] = useState<string | null>(null)
   const [portBusy, setPortBusy] = useState(false)
   const [portStatus, setPortStatus] = useState<string | null>(null)
 
@@ -68,13 +71,27 @@ export default function Settings({ open, onClose }: Props) {
     setPortInput(s.wsPort > 0 ? String(s.wsPort) : '')
   }, [s.wsPort])
 
-  async function saveAndRestart() {
-    const newPort = portInput === '' ? 0 : parseInt(portInput, 10)
-    if (portInput !== '' && (isNaN(newPort) || newPort < 1024 || newPort > 65535)) {
-      setPortStatus('Port must be between 1024 and 65535.')
+  function applyConnectionPort() {
+    const port = portInput === '' ? 0 : Number(portInput)
+    if (portInput !== '' && (!Number.isInteger(port) || port < 1 || port > 65535)) {
+      setConnectionError('Connection port must be between 1 and 65535, or empty for auto.')
       return
     }
-    const targetPort = newPort > 0 ? newPort : parseInt(window.location.port || '9000', 10)
+    s.update({ wsPort: port })
+    // Reconnect every consumer to the saved target.
+    window.location.reload()
+  }
+
+  async function saveAndRestart() {
+    const targetPort = Number(serverPortInput)
+    if (!Number.isInteger(targetPort) || targetPort < 1024 || targetPort > 65535) {
+      setPortStatus('Enter an internal server port between 1024 and 65535.')
+      return
+    }
+    // Only redirect when the user explicitly chooses direct access to this origin.
+    const redirectUrl = followServerPort && bridgeHttpBase() === window.location.origin
+      ? new URL(window.location.href)
+      : null
     setPortBusy(true)
     setPortStatus(null)
     try {
@@ -84,12 +101,14 @@ export default function Settings({ open, onClose }: Props) {
         body: JSON.stringify({ port: targetPort }),
       })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      // Keep wsPort at 0 (auto) — frontend follows the URL port.
-      s.update({ wsPort: 0 })
-      const url = new URL(window.location.href)
-      url.port = String(targetPort)
-      setTimeout(() => { window.location.href = url.toString() }, 1500)
-      setPortStatus('Restarting…')
+      if (redirectUrl) {
+        redirectUrl.port = String(targetPort)
+        s.update({ wsPort: 0 })
+        setTimeout(() => { window.location.href = redirectUrl.toString() }, 1500)
+        setPortStatus('Restart requested. Opening the new direct address…')
+        return
+      }
+      setPortStatus(`Restart requested on internal port ${targetPort}. With a reverse proxy, update its upstream port and reload this page. For direct access, open the bridge at its new port.`)
     } catch (e) {
       setPortStatus(`Error: ${e instanceof Error ? e.message : String(e)}`)
       setPortBusy(false)
@@ -224,64 +243,69 @@ export default function Settings({ open, onClose }: Props) {
             </Row>
           </Section>
 
-          {/* Connection */}
           <Section title="Connection">
-            <Row label="Bridge Host">
+            <label htmlFor="bridge-host" style={connectionLabelStyle}>Bridge Host</label>
+            <input
+              id="bridge-host" type="text" value={s.wsHost} disabled={portBusy}
+              placeholder="auto" onChange={(e) => s.update({ wsHost: e.target.value })}
+              style={{ ...inputStyle, width: '100%', boxSizing: 'border-box' }}
+            />
+            <p style={{ ...connectionHelpStyle, overflowWrap: 'anywhere' }}>
+              Auto host: {window.location.hostname}
+            </p>
+            <label htmlFor="connection-port" style={connectionLabelStyle}>Connection Port</label>
+            <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
               <input
-                type="text"
-                value={s.wsHost}
-                placeholder={`auto (${window.location.hostname})`}
-                onChange={(e) => s.update({ wsHost: e.target.value })}
-                style={inputStyle}
+                id="connection-port" type="number" value={portInput} min={1} max={65535} placeholder="auto"
+                onChange={(e) => { setPortInput(e.target.value); setConnectionError(null) }}
+                style={{ ...inputStyle, width: 110, flexShrink: 0, boxSizing: 'border-box' }} disabled={portBusy}
               />
-            </Row>
-            <Row label="Bridge Port">
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-                <input
-                  type="number"
-                  value={portInput}
-                  min={1024}
-                  max={65535}
-                  placeholder="auto"
-                  onChange={(e) => { setPortInput(e.target.value); setPortStatus(null) }}
-                  style={{ ...inputStyle, width: 80 }}
-                  disabled={portBusy}
-                />
-                <button
-                  onClick={saveAndRestart}
-                  disabled={portBusy}
-                  style={{
-                    ...btnStyle,
-                    background: portBusy ? colors.border : colors.primary,
-                    color: portBusy ? colors.textMuted : '#000',
-                    fontFamily: fonts.body,
-                    fontSize: 13,
-                    padding: '4px 10px',
-                    cursor: portBusy ? 'not-allowed' : 'pointer',
-                    borderRadius: 4,
-                    border: 'none',
-                    whiteSpace: 'nowrap',
-                  }}
-                >
-                  {portBusy ? 'Restarting…' : 'Save & Restart'}
-                </button>
-              </div>
-              {portStatus && (
-                <p style={{
-                  fontFamily: fonts.body,
-                  fontSize: 13,
-                  color: portStatus.startsWith('Error') ? '#f87171' : colors.textMuted,
-                  margin: '4px 0 0',
-                }}>
-                  {portStatus}
-                </p>
-              )}
-            </Row>
-            <p style={{ fontFamily: fonts.body, fontSize: 15, color: colors.textMuted, margin: 0 }}>
-              Leave port empty to auto-follow the bridge URL. "Save & Restart" writes the port to the bridge config and restarts.
+              <button onClick={applyConnectionPort} disabled={portBusy} style={connectionButtonStyle}>
+                Apply
+              </button>
+            </div>
+            {connectionError && <p role="alert" style={{ ...connectionHelpStyle, color: '#f87171' }}>{connectionError}</p>}
+            <p style={connectionHelpStyle}>
+              Empty means automatic. Apply reloads the dashboard; the bridge keeps running.
+              Behind a reverse proxy, use Auto or its public port.
             </p>
           </Section>
 
+          <details style={{ marginBottom: 24 }}>
+            <summary style={{ ...connectionLabelStyle, cursor: 'pointer', padding: '8px 0' }}>
+              Advanced: Bridge Server
+            </summary>
+            <div style={{ display: 'grid', gap: 10, paddingTop: 12 }}>
+              <label htmlFor="server-port" style={connectionLabelStyle}>New Internal Port</label>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'center' }}>
+                <input
+                  id="server-port" type="number" value={serverPortInput} min={1024} max={65535} placeholder="9000"
+                  onChange={(e) => { setServerPortInput(e.target.value); setPortStatus(null) }}
+                  style={{ ...inputStyle, width: 110, flexShrink: 0, boxSizing: 'border-box' }} disabled={portBusy}
+                />
+                <button onClick={saveAndRestart} disabled={portBusy || serverPortInput === ''} style={connectionButtonStyle}>
+                  {portBusy ? 'Restart requested' : 'Save & Restart'}
+                </button>
+              </div>
+              <label style={{ ...connectionLabelStyle, display: 'flex', alignItems: 'flex-start', gap: 8 }}>
+                <input
+                  type="checkbox" style={{ marginTop: 5, flexShrink: 0 }}
+                  checked={followServerPort && bridgeHttpBase() === window.location.origin}
+                  disabled={portBusy || bridgeHttpBase() !== window.location.origin}
+                  onChange={(e) => setFollowServerPort(e.target.checked)}
+                />
+                Open new port after restart
+              </label>
+              <p style={connectionHelpStyle}>
+                Direct access only. Leave unchecked behind a reverse proxy.
+              </p>
+              <p style={connectionHelpStyle}>
+                Changing the server port disconnects all clients. Update the proxy's upstream port afterward.
+                The public address stays unchanged unless the option above is selected.
+              </p>
+              {portStatus && <p role="status" style={connectionHelpStyle}>{portStatus}</p>}
+            </div>
+          </details>
           {/* Theme */}
           <Section title="Theme">
             <Row label="Primary color">
@@ -778,3 +802,15 @@ const inputStyle: React.CSSProperties = {
 
 // Keep compiler happy
 void SETTINGS_DEFAULTS
+
+const connectionLabelStyle: React.CSSProperties = {
+  fontFamily: fonts.body, fontSize: 18, color: colors.text,
+}
+const connectionHelpStyle: React.CSSProperties = {
+  fontFamily: fonts.body, fontSize: 15, lineHeight: 1.4, color: colors.textMuted, margin: '6px 0',
+}
+const connectionButtonStyle: React.CSSProperties = {
+  fontFamily: fonts.body, fontSize: 16, padding: '6px 12px', borderRadius: 4,
+  background: colors.bgWidget, border: `1px solid ${colors.border}`, color: colors.text,
+  cursor: 'pointer', whiteSpace: 'nowrap',
+}
