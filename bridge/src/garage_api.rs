@@ -11,6 +11,7 @@
 const STRATEGY_USAGE_URL: &str = "http://localhost:6397/rest/strategy/usage";
 const REPAIR_AND_REFUEL_URL: &str = "http://localhost:6397/rest/garage/UIScreen/RepairAndRefuel";
 const WEATHER_FORECAST_URL: &str = "http://localhost:6397/rest/sessions/weather";
+const WEATHER_FORECAST_TIMEOUT_SECS: u64 = 10;
 
 // ---------------------------------------------------------------------------
 // Public types
@@ -58,8 +59,8 @@ pub fn fetch_wearables() -> Option<WearablesSnapshot> {
 
 /// Fetch weather forecast for the current session type (blocking, 2 s timeout).
 /// `session` is the rF2 mSession integer (0=testday, 1-4=practice, 5-8=qual, 9=warmup, 10-13=race).
-/// Returns 5 nodes covering 0%, 25%, 50%, 75%, 100% of session length.
-pub fn fetch_weather_forecast(session: i32) -> Option<Vec<WeatherForecastNode>> {
+/// Returns 5 nodes covering 0%, 25%, 50%, 75%, 100% of session length, or a
+pub fn fetch_weather_forecast(session: i32) -> Result<Vec<WeatherForecastNode>, String> {
     imp::fetch_weather_forecast(session)
 }
 
@@ -69,7 +70,10 @@ pub fn fetch_weather_forecast(session: i32) -> Option<Vec<WeatherForecastNode>> 
 
 #[cfg(target_os = "windows")]
 mod imp {
-    use super::{STRATEGY_USAGE_URL, REPAIR_AND_REFUEL_URL, WEATHER_FORECAST_URL, WearablesSnapshot, WeatherForecastNode};
+    use super::{
+        STRATEGY_USAGE_URL, REPAIR_AND_REFUEL_URL, WEATHER_FORECAST_URL, WEATHER_FORECAST_TIMEOUT_SECS,
+        WearablesSnapshot, WeatherForecastNode,
+    };
 
     pub fn fetch_strategy_ve(player_name: &str) -> Option<Vec<f64>> {
         let response = ureq::get(STRATEGY_USAGE_URL)
@@ -146,23 +150,30 @@ mod imp {
             .unwrap_or([-1.0; 4])
     }
 
-    pub fn fetch_weather_forecast(session: i32) -> Option<Vec<WeatherForecastNode>> {
+    pub fn fetch_weather_forecast(session: i32) -> Result<Vec<WeatherForecastNode>, String> {
         let session_key = match session {
             0..=4 => "PRACTICE",
             5..=8 => "QUALIFY",
             _     => "RACE",  // 9=warmup, 10-13=race → all use RACE forecast
         };
 
+        let started = std::time::Instant::now();
         let response = ureq::get(WEATHER_FORECAST_URL)
-            .timeout(std::time::Duration::from_secs(2))
+            .timeout(std::time::Duration::from_secs(WEATHER_FORECAST_TIMEOUT_SECS))
             .call()
-            .map_err(|e| tracing::warn!("Weather forecast API unavailable: {}", e))
-            .ok()?;
+            .map_err(|e| {
+                let msg = format!("HTTP request failed after {} ms: {}", started.elapsed().as_millis(), e);
+                tracing::warn!("Weather forecast API unavailable: {}", msg);
+                msg
+            })?;
 
         let json: serde_json::Value = response
             .into_json()
-            .map_err(|e| tracing::warn!("Weather forecast JSON parse error: {}", e))
-            .ok()?;
+            .map_err(|e| {
+                let msg = format!("JSON parse error: {}", e);
+                tracing::warn!("Weather forecast {}", msg);
+                msg
+            })?;
 
         tracing::debug!("Weather forecast raw JSON: {}", json);
 
@@ -173,11 +184,12 @@ mod imp {
                 let available = json.as_object()
                     .map(|o| o.keys().cloned().collect::<Vec<_>>().join(", "))
                     .unwrap_or_else(|| "<not a JSON object>".to_string());
-                tracing::warn!(
-                    "Weather forecast: session key '{}' not found. Top-level keys: [{}]",
-                    session_key, available
+                let msg = format!(
+                    "session key '{}' (mSession={}) not found, top-level keys: [{}]",
+                    session_key, session, available
                 );
-                return None;
+                tracing::warn!("Weather forecast: {}", msg);
+                return Err(msg);
             }
         };
 
@@ -210,15 +222,19 @@ mod imp {
             let available = session_data.as_object()
                 .map(|o| o.keys().cloned().collect::<Vec<_>>().join(", "))
                 .unwrap_or_else(|| "<not a JSON object>".to_string());
-            tracing::warn!(
-                "Weather forecast: no nodes parsed for session '{}'. Node-level keys: [{}]",
+            let msg = format!(
+                "no nodes parsed for session '{}', node-level keys: [{}]",
                 session_key, available
             );
-            return None;
+            tracing::warn!("Weather forecast: {}", msg);
+            return Err(msg);
         }
 
-        tracing::debug!("Weather forecast: {} nodes for session key '{}'", nodes.len(), session_key);
-        Some(nodes)
+        tracing::debug!(
+            "Weather forecast: {} nodes for session key '{}' in {} ms",
+            nodes.len(), session_key, started.elapsed().as_millis()
+        );
+        Ok(nodes)
     }
 }
 
@@ -238,7 +254,7 @@ mod imp {
         None
     }
 
-    pub fn fetch_weather_forecast(_session: i32) -> Option<Vec<WeatherForecastNode>> {
-        None
+    pub fn fetch_weather_forecast(_session: i32) -> Result<Vec<WeatherForecastNode>, String> {
+        Err("LMU REST API is only queried on Windows builds".to_string())
     }
 }

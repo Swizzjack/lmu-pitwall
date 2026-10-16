@@ -39,6 +39,7 @@ export interface WeatherData {
   wind_speed_live?: number    // horizontal wind speed m/s from live mWind; absent when calm
   wind_rel_deg?: number       // wind angle relative to car nose: 0=headwind, ±180=tailwind, ±90=crosswind
   forecast: WeatherForecastNode[]
+  forecast_status?: string    // last forecast fetch outcome ("ok: …" / "error: …" / "waiting: …")
 }
 
 export interface VehicleScoring {

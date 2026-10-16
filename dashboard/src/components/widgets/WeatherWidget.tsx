@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { Sun, CloudSun, Cloud, CloudRain, CloudLightning, CloudFog, CloudDrizzle } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import {
@@ -357,6 +358,13 @@ export default function WeatherWidget() {
   const darkCloud      = weather?.dark_cloud        ?? 0
   const avgPathWetness = weather?.avg_path_wetness  ?? 0
   const forecast       = weather?.forecast          ?? []
+  const forecastStatus = !weather
+    ? 'waiting: no SessionInfo received from the bridge yet'
+    : weather.forecast_status ?? 'unknown: this bridge does not report forecast status'
+
+  useEffect(() => {
+    console.info(`[WeatherWidget] forecast ${forecast.length} nodes — ${forecastStatus}`)
+  }, [forecast.length, forecastStatus])
 
   const airTemp   = toDisplayTemp(airTempC)
   const trackTemp = toDisplayTemp(trackTempC)
@@ -469,6 +477,21 @@ export default function WeatherWidget() {
             liveRain={rainIntensity}
             liveDarkCloud={darkCloud}
           />
+        </>
+      )}
+
+      {/* ── Row 3 fallback: why there is no forecast ── */}
+      {weatherDetail !== 'compact' && forecast.length === 0 && (
+        <>
+          <Divider />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
+            <span style={{ fontFamily: fonts.body, fontSize: 11, color: colors.textMuted, textTransform: 'uppercase', letterSpacing: 2 }}>
+              Forecast unavailable
+            </span>
+            <span style={{ fontFamily: fonts.mono, fontSize: 10, color: colors.textMuted, wordBreak: 'break-word', lineHeight: 1.3 }}>
+              {forecastStatus}
+            </span>
+          </div>
         </>
       )}
 

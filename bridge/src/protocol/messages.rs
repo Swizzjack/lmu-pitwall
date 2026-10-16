@@ -55,6 +55,8 @@ pub struct WeatherData {
     /// 5 forecast nodes: 0%, 25%, 50%, 75%, 100% of session length.
     /// Empty when LMU REST API is unavailable.
     pub forecast: Vec<WeatherForecastNode>,
+    #[serde(default)]
+    pub forecast_status: String,
 }
 
 /// Tire snapshot for one wheel at S/F line crossing (telemetry at lap completion).

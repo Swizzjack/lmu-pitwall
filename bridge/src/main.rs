@@ -57,6 +57,8 @@ struct TelemetryState {
     wearables: garage_api::WearablesSnapshot,
     /// Latest weather forecast nodes from /rest/sessions/weather REST API.
     weather_forecast: Vec<garage_api::WeatherForecastNode>,
+    /// Outcome of the last forecast fetch, forwarded to the dashboard for diagnostics.
+    forecast_status: String,
 }
 
 impl TelemetryState {
@@ -70,6 +72,7 @@ impl TelemetryState {
             ve_available: None,
             wearables: garage_api::WearablesSnapshot::default(),
             weather_forecast: Vec::new(),
+            forecast_status: "waiting: no fetch attempted yet".to_string(),
         }
     }
 }
@@ -325,7 +328,11 @@ fn build_electronics_update(snap: &ElectronicsSnapshot) -> ServerMessage {
     }
 }
 
-fn build_session_info(sc: &ScoringFrame, forecast: Vec<garage_api::WeatherForecastNode>) -> ServerMessage {
+fn build_session_info(
+    sc: &ScoringFrame,
+    forecast: Vec<garage_api::WeatherForecastNode>,
+    forecast_status: String,
+) -> ServerMessage {
     let info = &sc.mScoringInfo;
     // mDarkCloud is unreliable in LMU (often stuck at 0). Derive cloudiness from the
     // START node's sky_type instead (0=clear…10=heavy overcast+storm → 0.0–1.0).
@@ -406,6 +413,7 @@ fn build_session_info(sc: &ScoringFrame, forecast: Vec<garage_api::WeatherForeca
             wind_speed_live,
             wind_rel_deg,
             forecast,
+            forecast_status,
         },
         // Filter mMaxLaps: time-based races use 999999, uninitialized can be INT32_MAX.
         // Only send a valid lap count when it's a genuine lap-limited session.
@@ -547,9 +555,12 @@ async fn task_polling(
     let (wearables_tx, mut wearables_rx) = tokio::sync::mpsc::channel::<garage_api::WearablesSnapshot>(4);
     // Guard: skip tick if a wearables fetch is already in flight.
     let wearables_in_flight = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // LMU answers the weather endpoint slowly; never stack a new request on a pending one.
+    let forecast_in_flight = Arc::new(std::sync::atomic::AtomicBool::new(false));
 
     // Channel for weather forecast fetch results.
-    let (forecast_tx, mut forecast_rx) = tokio::sync::mpsc::channel::<Vec<garage_api::WeatherForecastNode>>(4);
+    let (forecast_tx, mut forecast_rx) =
+        tokio::sync::mpsc::channel::<(i32, Result<Vec<garage_api::WeatherForecastNode>, String>)>(4);
 
     let mut poll_ticker = tokio::time::interval(Duration::from_millis(20)); // 50 Hz
     poll_ticker.set_missed_tick_behavior(MissedTickBehavior::Skip);
@@ -759,23 +770,42 @@ async fn task_polling(
 
             // --- weather forecast poll (0.2 Hz — every 5 s) ---
             _ = forecast_ticker.tick() => {
-                if reader.is_connected() {
+                if reader.is_connected() && !forecast_in_flight.load(Ordering::Relaxed) {
+                    forecast_in_flight.store(true, Ordering::Relaxed);
+                    let flag = forecast_in_flight.clone();
                     let session = state.read().await.scoring
                         .as_ref()
                         .map(|sc| sc.mScoringInfo.mSession)
                         .unwrap_or(0);
                     let tx = forecast_tx.clone();
                     tokio::task::spawn_blocking(move || {
-                        if let Some(nodes) = garage_api::fetch_weather_forecast(session) {
-                            let _ = tx.blocking_send(nodes);
-                        }
+                        let result = garage_api::fetch_weather_forecast(session);
+                        flag.store(false, Ordering::Relaxed);
+                        let _ = tx.blocking_send((session, result));
                     });
+                } else if !reader.is_connected() {
+                    state.write().await.forecast_status =
+                        "waiting: game not connected (shared memory unavailable)".to_string();
                 }
             }
 
             // --- weather forecast result ---
-            Some(nodes) = forecast_rx.recv() => {
-                state.write().await.weather_forecast = nodes;
+            Some((session, result)) = forecast_rx.recv() => {
+                let mut s = state.write().await;
+                let status = match result {
+                    Ok(nodes) => {
+                        let status = format!("ok: {} nodes (mSession={})", nodes.len(), session);
+                        s.weather_forecast = nodes;
+                        status
+                    }
+                    Err(reason) => format!("error: {}", reason),
+                };
+                if status.split(':').next() != s.forecast_status.split(':').next()
+                    || (status.starts_with("error") && status != s.forecast_status)
+                {
+                    info!("Weather forecast status: {}", status);
+                }
+                s.forecast_status = status;
             }
 
             // --- 0.5 Hz health check / reconnect ---
@@ -974,7 +1004,7 @@ async fn task_broadcaster(
             };
 
             let session_msg = if send_session {
-                s.scoring.as_ref().map(|sc| build_session_info(sc, s.weather_forecast.clone()))
+                s.scoring.as_ref().map(|sc| build_session_info(sc, s.weather_forecast.clone(), s.forecast_status.clone()))
             } else {
                 None
             };
